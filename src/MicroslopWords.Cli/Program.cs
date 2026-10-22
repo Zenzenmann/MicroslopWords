@@ -26,8 +26,19 @@ if (args[0] == "to-text")
     }
 
     using var stream = File.OpenRead(path);
-    var document = DocxService.Load(stream, Path.GetFileNameWithoutExtension(path));
-    Console.Out.Write(document.PlainText);
+    var result = DocxService.Load(stream, Path.GetFileNameWithoutExtension(path));
+
+    if (!result.IsSuccess || result.Value is null)
+    {
+        foreach (var diagnostic in result.Diagnostics)
+        {
+            Console.Error.WriteLine($"{diagnostic.Code}: {diagnostic.Message}");
+        }
+
+        return 1;
+    }
+
+    Console.Out.Write(result.Value.PlainText);
     return 0;
 }
 
