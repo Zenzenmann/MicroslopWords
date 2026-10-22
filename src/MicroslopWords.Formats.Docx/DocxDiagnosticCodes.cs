@@ -11,6 +11,9 @@ public static class DocxDiagnosticCodes
     public const string FileUnreadable = "MSW3004";
     public const string InvalidSignature = "MSW3005";
     public const string EmptyPath = "MSW3006";
+    public const string SaveDenied = "MSW3007";
+    public const string SaveFailed = "MSW3008";
+    public const string InvalidSavePath = "MSW3009";
 
     public const string UnsupportedTable = "MSW2001";
     public const string UnsupportedImage = "MSW2002";
