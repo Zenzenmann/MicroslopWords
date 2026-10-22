@@ -31,7 +31,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Open_success_updates_document_state_and_diagnostics()
     {
-        var picker = new FakeFilePicker(@"C:\docs\opened.docx");
+        var picker = new FakeFilePicker(TestPath("opened.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(
                 CreateDocument("Opened"),
@@ -40,10 +40,10 @@ public sealed class MainViewModelTests
 
         await viewModel.OpenDocumentCommand.ExecuteAsync(null);
 
-        loader.LastPath.ShouldBe(@"C:\docs\opened.docx");
+        loader.LastPath.ShouldBe(TestPath("opened.docx"));
         viewModel.DocumentTitle.ShouldBe("Opened");
         viewModel.WindowTitle.ShouldBe("Opened - MicroslopWords");
-        viewModel.FilePath.ShouldBe(@"C:\docs\opened.docx");
+        viewModel.FilePath.ShouldBe(TestPath("opened.docx"));
         viewModel.PageCount.ShouldBe(1);
         viewModel.HasDiagnostics.ShouldBeTrue();
         viewModel.HasError.ShouldBeFalse();
@@ -53,7 +53,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Open_failure_keeps_previous_document_and_reports_file()
     {
-        var picker = new FakeFilePicker(@"C:\docs\broken.docx");
+        var picker = new FakeFilePicker(TestPath("broken.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Failure<Document>(
                 new Diagnostic(
@@ -76,7 +76,7 @@ public sealed class MainViewModelTests
     public async Task Open_shows_progress_after_one_second_and_keeps_previous_document_visible()
     {
         var release = new ManualResetEventSlim();
-        var picker = new FakeFilePicker(@"C:\docs\slow.docx");
+        var picker = new FakeFilePicker(TestPath("slow.docx"));
         var loader = new FakeDocumentLoader((_, cancellationToken) =>
         {
             release.Wait(TimeSpan.FromSeconds(10), cancellationToken);
@@ -108,7 +108,7 @@ public sealed class MainViewModelTests
     public async Task Canceling_open_discards_pending_result()
     {
         var started = new ManualResetEventSlim();
-        var picker = new FakeFilePicker(@"C:\docs\slow.docx");
+        var picker = new FakeFilePicker(TestPath("slow.docx"));
         var loader = new FakeDocumentLoader((_, cancellationToken) =>
         {
             started.Set();
@@ -137,7 +137,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Save_with_existing_path_writes_to_current_path_and_clears_dirty_state()
     {
-        var picker = new FakeFilePicker(@"C:\docs\source.docx");
+        var picker = new FakeFilePicker(TestPath("source.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(CreateDocument("Opened")));
         var saver = new FakeDocumentSaver((_, path) => OperationResult.Success(path));
@@ -159,9 +159,9 @@ public sealed class MainViewModelTests
         await viewModel.SaveDocumentCommand.ExecuteAsync(null);
 
         saver.SaveCount.ShouldBe(1);
-        saver.LastPath.ShouldBe(@"C:\docs\source.docx");
+        saver.LastPath.ShouldBe(TestPath("source.docx"));
         picker.SavePickerCalls.ShouldBe(0);
-        viewModel.FilePath.ShouldBe(@"C:\docs\source.docx");
+        viewModel.FilePath.ShouldBe(TestPath("source.docx"));
         viewModel.IsModified.ShouldBeFalse();
         viewModel.WindowTitle.ShouldBe("Opened - MicroslopWords");
         viewModel.SaveStateText.ShouldBe("Saved");
@@ -173,7 +173,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Save_without_path_invokes_save_as_and_changes_path_after_success()
     {
-        var picker = new FakeFilePicker(openPath: null, savePath: @"C:\docs\new.docx");
+        var picker = new FakeFilePicker(openPath: null, savePath: TestPath("new.docx"));
         var saver = new FakeDocumentSaver((_, path) => OperationResult.Success(path));
         var viewModel = new MainViewModel(
             picker,
@@ -188,8 +188,8 @@ public sealed class MainViewModelTests
         await viewModel.SaveDocumentCommand.ExecuteAsync(null);
 
         picker.LastSuggestedSaveName.ShouldBe("Untitled.docx");
-        saver.LastPath.ShouldBe(@"C:\docs\new.docx");
-        viewModel.FilePath.ShouldBe(@"C:\docs\new.docx");
+        saver.LastPath.ShouldBe(TestPath("new.docx"));
+        viewModel.FilePath.ShouldBe(TestPath("new.docx"));
         viewModel.DocumentTitle.ShouldBe("new");
         viewModel.WindowTitle.ShouldBe("new - MicroslopWords");
         viewModel.IsModified.ShouldBeFalse();
@@ -200,7 +200,7 @@ public sealed class MainViewModelTests
     public async Task Canceled_save_as_keeps_path_content_dirty_state_and_history()
     {
         var picker = new FakeFilePicker(
-            openPath: @"C:\docs\source.docx",
+            openPath: TestPath("source.docx"),
             savePath: null);
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(CreateDocument("Opened")));
@@ -219,7 +219,7 @@ public sealed class MainViewModelTests
         await viewModel.SaveDocumentAsCommand.ExecuteAsync(null);
 
         saver.SaveCount.ShouldBe(0);
-        viewModel.FilePath.ShouldBe(@"C:\docs\source.docx");
+        viewModel.FilePath.ShouldBe(TestPath("source.docx"));
         viewModel.DocumentTitle.ShouldBe("Opened");
         viewModel.IsModified.ShouldBeTrue();
         viewModel.History.ShouldBeSameAs(history);
@@ -230,8 +230,8 @@ public sealed class MainViewModelTests
     public async Task Failed_save_as_keeps_previous_path_and_file_state()
     {
         var picker = new FakeFilePicker(
-            openPath: @"C:\docs\source.docx",
-            savePath: @"C:\docs\unwritable.docx");
+            openPath: TestPath("source.docx"),
+            savePath: TestPath("unwritable.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(CreateDocument("Opened")));
         var saver = new FakeDocumentSaver((_, _) =>
@@ -253,7 +253,7 @@ public sealed class MainViewModelTests
 
         await viewModel.SaveDocumentAsCommand.ExecuteAsync(null);
 
-        viewModel.FilePath.ShouldBe(@"C:\docs\source.docx");
+        viewModel.FilePath.ShouldBe(TestPath("source.docx"));
         viewModel.IsModified.ShouldBeTrue();
         viewModel.History.ShouldBeSameAs(history);
         viewModel.HasError.ShouldBeTrue();
@@ -264,7 +264,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Canceled_save_keeps_document_dirty_and_path_unchanged()
     {
-        var picker = new FakeFilePicker(@"C:\docs\source.docx");
+        var picker = new FakeFilePicker(TestPath("source.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(CreateDocument("Opened")));
         var saver = new CancellableDocumentSaver();
@@ -289,7 +289,7 @@ public sealed class MainViewModelTests
         await saveTask;
 
         viewModel.IsSaving.ShouldBeFalse();
-        viewModel.FilePath.ShouldBe(@"C:\docs\source.docx");
+        viewModel.FilePath.ShouldBe(TestPath("source.docx"));
         viewModel.IsModified.ShouldBeTrue();
         viewModel.History.ShouldBeSameAs(history);
         viewModel.StatusText.ShouldBe("Save canceled.");
@@ -298,7 +298,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Unsupported_content_save_defaults_to_cancel_without_writing()
     {
-        var picker = new FakeFilePicker(@"C:\docs\source.docx");
+        var picker = new FakeFilePicker(TestPath("source.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(
                 CreateDocument("Opened"),
@@ -322,7 +322,7 @@ public sealed class MainViewModelTests
 
         confirmation.UnsupportedPromptCount.ShouldBe(1);
         saver.SaveCount.ShouldBe(0);
-        viewModel.FilePath.ShouldBe(@"C:\docs\source.docx");
+        viewModel.FilePath.ShouldBe(TestPath("source.docx"));
         viewModel.IsModified.ShouldBeTrue();
         viewModel.HasDiagnostics.ShouldBeTrue();
         viewModel.StatusText.ShouldContain("not acknowledged");
@@ -331,7 +331,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Acknowledged_unsupported_content_save_writes_and_clears_notice()
     {
-        var picker = new FakeFilePicker(@"C:\docs\source.docx");
+        var picker = new FakeFilePicker(TestPath("source.docx"));
         var loader = new FakeDocumentLoader((_, _) =>
             OperationResult.Success(
                 CreateDocument("Opened"),
@@ -363,7 +363,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Save_as_without_extension_adds_docx_after_confirmation()
     {
-        var picker = new FakeFilePicker(openPath: null, savePath: @"C:\docs\new");
+        var picker = new FakeFilePicker(openPath: null, savePath: TestPath("new"));
         var saver = new FakeDocumentSaver((_, path) => OperationResult.Success(path));
         var confirmation = new FakeSaveConfirmation(canAddExtension: true);
         var viewModel = new MainViewModel(
@@ -379,15 +379,15 @@ public sealed class MainViewModelTests
         await viewModel.SaveDocumentAsCommand.ExecuteAsync(null);
 
         confirmation.ExtensionPromptCount.ShouldBe(1);
-        saver.LastPath.ShouldBe(@"C:\docs\new.docx");
-        viewModel.FilePath.ShouldBe(@"C:\docs\new.docx");
+        saver.LastPath.ShouldBe(TestPath("new.docx"));
+        viewModel.FilePath.ShouldBe(TestPath("new.docx"));
         viewModel.DocumentTitle.ShouldBe("new");
     }
 
     [Fact]
     public async Task Declining_docx_extension_keeps_document_unsaved()
     {
-        var picker = new FakeFilePicker(openPath: null, savePath: @"C:\docs\new");
+        var picker = new FakeFilePicker(openPath: null, savePath: TestPath("new"));
         var saver = new FakeDocumentSaver((_, path) => OperationResult.Success(path));
         var confirmation = new FakeSaveConfirmation(canAddExtension: false);
         var viewModel = new MainViewModel(
@@ -412,7 +412,7 @@ public sealed class MainViewModelTests
     [Fact]
     public async Task Save_as_with_non_docx_extension_reports_error_without_writing()
     {
-        var picker = new FakeFilePicker(openPath: null, savePath: @"C:\docs\new.txt");
+        var picker = new FakeFilePicker(openPath: null, savePath: TestPath("new.txt"));
         var saver = new FakeDocumentSaver((_, path) => OperationResult.Success(path));
         var viewModel = new MainViewModel(
             picker,
@@ -438,6 +438,9 @@ public sealed class MainViewModelTests
             new FakeDocumentLoader((_, _) =>
                 OperationResult.Failure<Document>("TEST", "Not used.")),
             new LayoutEngine());
+
+    private static string TestPath(string fileName) =>
+        Path.Combine(Path.GetTempPath(), "MicroslopWords.Tests", fileName);
 
     private static void AddEdit(MainViewModel viewModel)
     {
