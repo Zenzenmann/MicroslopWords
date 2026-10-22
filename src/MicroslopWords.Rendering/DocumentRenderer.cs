@@ -5,11 +5,11 @@ namespace MicroslopWords.Rendering;
 
 public sealed class DocumentRenderer
 {
-    private readonly SKColor _lineColor;
+    private readonly SKTypeface _typeface;
 
-    public DocumentRenderer(SKColor? lineColor = null)
+    public DocumentRenderer(SKTypeface? typeface = null)
     {
-        _lineColor = lineColor ?? new SKColor(210, 210, 210);
+        _typeface = typeface ?? SKTypeface.FromFamilyName("Arial") ?? SKTypeface.Default;
     }
 
     public IReadOnlyList<SKBitmap> RenderDocument(DocumentLayout layout, float scale = 1f)
@@ -37,25 +37,31 @@ public sealed class DocumentRenderer
         using var canvas = new SKCanvas(bitmap);
         canvas.Clear(SKColors.White);
 
-        using var linePaint = new SKPaint
+        using var textPaint = new SKPaint
         {
-            Color = _lineColor,
-            StrokeWidth = 1,
+            Color = SKColors.Black,
             IsAntialias = true,
         };
 
         foreach (var line in page.Paragraphs.SelectMany(paragraph => paragraph.Lines))
         {
-            var rect = SKRect.Create(
-                (float)(line.Bounds.X * scale),
-                (float)(line.Bounds.Y * scale),
-                (float)(Math.Max(1, line.Bounds.Width) * scale),
-                (float)(Math.Max(1, line.Bounds.Height) * scale));
+            var fontSize = (float)(line.FontSizePoints * scale);
+            using var font = new SKFont(_typeface, fontSize);
+            var x = (float)(line.Bounds.X * scale);
+            var baseline = (float)((line.Bounds.Y + line.FontSizePoints) * scale);
 
-            canvas.DrawRect(rect, linePaint);
+            canvas.DrawText(line.Text, x, baseline, font, textPaint);
         }
 
         canvas.Flush();
         return bitmap;
+    }
+
+    public byte[] RenderPagePng(PageLayout page, float scale = 1f)
+    {
+        using var bitmap = RenderPage(page, scale);
+        using var image = SKImage.FromBitmap(bitmap);
+        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
+        return data.ToArray();
     }
 }

@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:controls="using:MicroslopWords.App.Controls"
         xmlns:vm="using:MicroslopWords.App.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -9,7 +10,7 @@
         Width="1280" Height="840"
         MinWidth="960" MinHeight="640"
         WindowStartupLocation="CenterScreen"
-        Title="MicroslopWords">
+        Title="{Binding WindowTitle}">
 
     <Design.DataContext>
         <vm:MainViewModel />
@@ -25,17 +26,17 @@
                 <MenuItem Header="E_xit" />
             </MenuItem>
             <MenuItem Header="_Edit">
-                <MenuItem Header="_Undo" />
-                <MenuItem Header="_Redo" />
+                <MenuItem Header="_Undo" IsEnabled="False" />
+                <MenuItem Header="_Redo" IsEnabled="False" />
                 <Separator />
                 <MenuItem Header="_Find" Command="{Binding FindCommand}" />
             </MenuItem>
-            <MenuItem Header="_Insert">
+            <MenuItem Header="_Insert" IsEnabled="{Binding IsEditingEnabled}">
                 <MenuItem Header="_Table" />
                 <MenuItem Header="_Image..." />
                 <MenuItem Header="Page _Break" />
             </MenuItem>
-            <MenuItem Header="_Format">
+            <MenuItem Header="_Format" IsEnabled="{Binding IsEditingEnabled}">
                 <MenuItem Header="_Bold" Command="{Binding ToggleBoldCommand}" />
                 <MenuItem Header="_Italic" Command="{Binding ToggleItalicCommand}" />
                 <MenuItem Header="_Underline" Command="{Binding ToggleUnderlineCommand}" />
@@ -59,37 +60,65 @@
             </StackPanel>
         </Border>
 
+        <Border DockPanel.Dock="Top" Background="#EAF3FF" BorderBrush="#C8DDF7" BorderThickness="0,0,0,1" Padding="10,6">
+            <TextBlock Text="Read-only preview - editing is not available yet."
+                       FontSize="12"
+                       Foreground="#24527A" />
+        </Border>
+
+        <Border DockPanel.Dock="Top"
+                Background="#FDECEA"
+                BorderBrush="#F3B8B2"
+                BorderThickness="0,0,0,1"
+                Padding="10,6"
+                IsVisible="{Binding HasError}">
+            <TextBlock Text="{Binding ErrorMessage}"
+                       FontSize="12"
+                       Foreground="#8A1F11"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <Border DockPanel.Dock="Top"
+                Background="#FFF4CE"
+                BorderBrush="#E8D48B"
+                BorderThickness="0,0,0,1"
+                Padding="10,6"
+                IsVisible="{Binding HasDiagnostics}">
+            <TextBlock Text="{Binding DiagnosticsSummary}"
+                       FontSize="12"
+                       Foreground="#5F4B00"
+                       TextWrapping="Wrap" />
+        </Border>
+
+        <Border DockPanel.Dock="Top"
+                Background="#F7F7F7"
+                BorderBrush="#D8D8D8"
+                BorderThickness="0,0,0,1"
+                Padding="10,6"
+                IsVisible="{Binding IsProgressVisible}">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <ProgressBar Width="180" IsIndeterminate="True" />
+                <TextBlock Text="Opening document..." FontSize="12" VerticalAlignment="Center" />
+                <Button Content="Cancel" Command="{Binding OpenDocumentCancelCommand}" />
+            </StackPanel>
+        </Border>
+
         <Border DockPanel.Dock="Bottom" Background="#F5F5F5" BorderBrush="#D8D8D8" BorderThickness="0,1,0,0" Padding="10,5">
             <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding StatusText}" FontSize="12" />
-                <TextBlock Grid.Column="1" Text="{Binding DocumentTitle}" FontSize="12" Foreground="#666666" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
+                    <TextBlock Text="{Binding DocumentTitle}" FontSize="12" Foreground="#666666" />
+                    <TextBlock Text="{Binding PageLabel}" FontSize="12" Foreground="#666666" />
+                </StackPanel>
             </Grid>
         </Border>
 
-        <Grid Background="#E8E8E8">
-            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
-                <Border Background="White"
-                        Width="816" Height="1056"
-                        Margin="24"
-                        HorizontalAlignment="Center"
-                        VerticalAlignment="Top"
-                        BoxShadow="0 2 10 0 #33000000">
-                    <Grid Margin="96,72">
-                        <StackPanel Spacing="12">
-                            <TextBlock Text="{Binding DocumentTitle}"
-                                       FontSize="28"
-                                       FontWeight="SemiBold" />
-                            <TextBlock Text="The editor canvas will render here."
-                                       FontSize="14"
-                                       Foreground="#888888" />
-                            <TextBlock Text="MicroslopWords is in bootstrap. Open a DOCX once STORY-006 lands."
-                                       FontSize="14"
-                                       Foreground="#888888"
-                                       TextWrapping="Wrap" />
-                        </StackPanel>
-                    </Grid>
-                </Border>
-            </ScrollViewer>
-        </Grid>
+        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                      VerticalScrollBarVisibility="Auto"
+                      Background="#E8E8E8">
+            <controls:DocumentPreviewControl Layout="{Binding Layout}"
+                                             HorizontalAlignment="Center"
+                                             VerticalAlignment="Top" />
+        </ScrollViewer>
     </DockPanel>
 </Window>

@@ -24,7 +24,7 @@ public sealed class MainWindowTests
         var viewModel = new MainViewModel();
         var window = new MainWindow { DataContext = viewModel };
 
-        window.Title.ShouldBe("MicroslopWords");
+        window.Title.ShouldBe("Untitled - MicroslopWords");
         window.DataContext.ShouldBeSameAs(viewModel);
     }
 }
