@@ -306,9 +306,9 @@ $invoke
         $lastLog = $logPath
         Write-Host "Attempt $attempt of $MaxAttempts for $Story."
 
-        $agentArgs = @('run', '--auto', '--dir', $repoRoot, '--title', "$Story attempt $attempt")
+        $agentName = if ($Agent) { $Agent } else { 'build' }
+        $agentArgs = @('run', '--auto', '--dir', $repoRoot, '--title', "$Story attempt $attempt", '--agent', $agentName)
         if ($Model) { $agentArgs += @('--model', $Model) }
-        if ($Agent) { $agentArgs += @('--agent', $Agent) }
         $agentArgs += $prompt
 
         $agentExit = Invoke-Native -FilePath 'opencode' -Arguments $agentArgs -LogPath $logPath
@@ -319,7 +319,7 @@ $invoke
             continue
         }
 
-        $changed = Get-ChangedFiles
+        $changed = @(Get-ChangedFiles)
         if ($changed.Count -eq 0) {
             $lastFailure = 'Agent produced no file changes.'
             Write-Warning $lastFailure
@@ -362,7 +362,7 @@ $invoke
         throw "Story $Story failed after $MaxAttempts attempts. See deferred-work.md."
     }
 
-    $changed = Get-ChangedFiles
+    $changed = @(Get-ChangedFiles)
     Assert-ProtectedFilesUntouched -Files $changed
     git -C $repoRoot add -A
     if ($LASTEXITCODE -ne 0) { throw 'git add failed.' }
