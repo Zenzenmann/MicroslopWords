@@ -237,9 +237,28 @@ try {
     }
 
     if ($currentBranch -eq 'main') {
-        Write-Host "Creating $branch from main."
-        git -C $repoRoot switch -c $branch
-        if ($LASTEXITCODE -ne 0) { throw "Could not create branch $branch." }
+        $branchExists = $false
+        git -C $repoRoot show-ref --verify --quiet "refs/heads/$branch"
+        if ($LASTEXITCODE -eq 0) { $branchExists = $true }
+
+        if ($branchExists) {
+            git -C $repoRoot merge-base --is-ancestor $branch main
+            if ($LASTEXITCODE -eq 0) {
+                Write-Host "Removing already-merged branch $branch."
+                git -C $repoRoot branch -D $branch | Out-Null
+                $branchExists = $false
+            }
+        }
+
+        if ($branchExists) {
+            Write-Host "Switching to existing branch $branch."
+            git -C $repoRoot switch $branch
+        }
+        else {
+            Write-Host "Creating $branch from main."
+            git -C $repoRoot switch -c $branch
+        }
+        if ($LASTEXITCODE -ne 0) { throw "Could not switch to branch $branch." }
     }
     elseif ($currentBranch -ne $branch) {
         $exists = git -C $repoRoot show-ref --verify --quiet "refs/heads/$branch"
