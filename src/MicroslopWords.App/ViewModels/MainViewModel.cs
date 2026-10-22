@@ -9,22 +9,34 @@ using MicroslopWords.Layout;
 
 namespace MicroslopWords.App.ViewModels;
 
-public partial class MainViewModel : ViewModelBase
+public partial class MainViewModel : ViewModelBase, IDisposable
 {
     private static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
 
+    public static readonly TimeSpan MinimumAutosaveInterval = TimeSpan.FromSeconds(30);
+    public static readonly TimeSpan MaximumAutosaveInterval = TimeSpan.FromMinutes(5);
+
+    private static readonly TimeSpan DefaultAutosaveInterval = TimeSpan.FromSeconds(60);
+
     private readonly IDocxFilePicker _filePicker;
     private readonly IDocxDocumentLoader _documentLoader;
     private readonly IDocxDocumentSaver _documentSaver;
     private readonly ISaveConfirmation _saveConfirmation;
+    private readonly IRecoverySnapshotStore? _recoveryStore;
+    private readonly IRecoveryPrompt? _recoveryPrompt;
+    private readonly TimeSpan _autosaveInterval;
+    private readonly TimeProvider _timeProvider;
     private readonly LayoutEngine _layoutEngine;
     private readonly bool _isReadOnly = true;
     private CommandHistory _history;
     private IReadOnlyList<Diagnostic> _documentDiagnostics = [];
     private CancellationTokenSource? _saveCancellation;
+    private CancellationTokenSource? _autosaveCancellation;
+    private bool _recoveryWarningShown;
+    private bool _recoveryUnavailableNoticeShown;
     private int _documentGeneration;
 
     public MainViewModel()
@@ -56,22 +68,120 @@ public partial class MainViewModel : ViewModelBase
         LayoutEngine layoutEngine,
         IDocxDocumentSaver documentSaver,
         ISaveConfirmation saveConfirmation)
+        : this(
+            filePicker,
+            documentLoader,
+            layoutEngine,
+            documentSaver,
+            saveConfirmation,
+            recoveryStore: null,
+            recoveryPrompt: null,
+            DefaultAutosaveInterval,
+            TimeProvider.System)
+    {
+    }
+
+    public MainViewModel(
+        IDocxFilePicker filePicker,
+        IDocxDocumentLoader documentLoader,
+        LayoutEngine layoutEngine,
+        IDocxDocumentSaver documentSaver,
+        ISaveConfirmation saveConfirmation,
+        IRecoverySnapshotStore recoveryStore,
+        IRecoveryPrompt recoveryPrompt)
+        : this(
+            filePicker,
+            documentLoader,
+            layoutEngine,
+            documentSaver,
+            saveConfirmation,
+            recoveryStore,
+            recoveryPrompt,
+            DefaultAutosaveInterval,
+            TimeProvider.System)
+    {
+    }
+
+    public MainViewModel(
+        IDocxFilePicker filePicker,
+        IDocxDocumentLoader documentLoader,
+        LayoutEngine layoutEngine,
+        IDocxDocumentSaver documentSaver,
+        ISaveConfirmation saveConfirmation,
+        IRecoverySnapshotStore recoveryStore,
+        IRecoveryPrompt recoveryPrompt,
+        TimeSpan autosaveInterval)
+        : this(
+            filePicker,
+            documentLoader,
+            layoutEngine,
+            documentSaver,
+            saveConfirmation,
+            recoveryStore,
+            recoveryPrompt,
+            ValidateAutosaveInterval(autosaveInterval),
+            TimeProvider.System)
+    {
+    }
+
+    internal MainViewModel(
+        IDocxFilePicker filePicker,
+        IDocxDocumentLoader documentLoader,
+        LayoutEngine layoutEngine,
+        IDocxDocumentSaver documentSaver,
+        ISaveConfirmation saveConfirmation,
+        IRecoverySnapshotStore? recoveryStore,
+        IRecoveryPrompt? recoveryPrompt,
+        TimeSpan autosaveInterval,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(filePicker);
         ArgumentNullException.ThrowIfNull(documentLoader);
         ArgumentNullException.ThrowIfNull(layoutEngine);
         ArgumentNullException.ThrowIfNull(documentSaver);
         ArgumentNullException.ThrowIfNull(saveConfirmation);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+
+        if (recoveryStore is not null && recoveryPrompt is null)
+        {
+            throw new ArgumentNullException(nameof(recoveryPrompt));
+        }
+
+        if (autosaveInterval <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(autosaveInterval),
+                "The autosave interval must be positive.");
+        }
 
         _filePicker = filePicker;
         _documentLoader = documentLoader;
         _layoutEngine = layoutEngine;
         _documentSaver = documentSaver;
         _saveConfirmation = saveConfirmation;
+        _recoveryStore = recoveryStore;
+        _recoveryPrompt = recoveryPrompt;
+        _autosaveInterval = autosaveInterval;
+        _timeProvider = timeProvider;
         _history = new CommandHistory(Document.CreateEmpty());
 
         ApplyDocument(_history.Current, filePath: null);
         StatusText = "Ready.";
+    }
+
+    private static TimeSpan ValidateAutosaveInterval(TimeSpan autosaveInterval)
+    {
+        if (autosaveInterval < MinimumAutosaveInterval
+            || autosaveInterval > MaximumAutosaveInterval)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(autosaveInterval),
+                $"The autosave interval must be between "
+                + $"{MinimumAutosaveInterval.TotalSeconds:0} and "
+                + $"{MaximumAutosaveInterval.TotalSeconds:0} seconds.");
+        }
+
+        return autosaveInterval;
     }
 
     [ObservableProperty]
@@ -270,6 +380,15 @@ public partial class MainViewModel : ViewModelBase
     {
         UpdateWindowTitle();
         OnPropertyChanged(nameof(SaveStateText));
+
+        if (value)
+        {
+            StartAutosave();
+        }
+        else
+        {
+            StopAutosave();
+        }
     }
 
     partial void OnFilePathChanged(string value) =>
@@ -301,6 +420,123 @@ public partial class MainViewModel : ViewModelBase
 
     partial void OnDiagnosticsSummaryChanged(string value) =>
         OnPropertyChanged(nameof(HasDiagnostics));
+
+    public async Task InitializeRecoveryAsync(CancellationToken cancellationToken = default)
+    {
+        if (_recoveryStore is null || _recoveryPrompt is null)
+        {
+            return;
+        }
+
+        foreach (var snapshot in _recoveryStore.ListSnapshots())
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var choice = await _recoveryPrompt.PromptAsync(snapshot, cancellationToken);
+
+            if (choice == RecoveryPromptChoice.Later)
+            {
+                return;
+            }
+
+            if (choice == RecoveryPromptChoice.Discard)
+            {
+                var confirmed = await _recoveryPrompt.ConfirmDiscardAsync(
+                    snapshot,
+                    cancellationToken);
+
+                if (confirmed)
+                {
+                    var discardResult = await Task.Run(
+                        () => _recoveryStore.Discard(snapshot, cancellationToken),
+                        cancellationToken);
+
+                    if (!discardResult.IsSuccess)
+                    {
+                        ShowRecoveryFailure(
+                            discardResult.Diagnostics,
+                            "The recovery snapshot could not be discarded.");
+                    }
+                }
+
+                continue;
+            }
+
+            var loadResult = await Task.Run(
+                () => _recoveryStore.Load(snapshot, cancellationToken),
+                cancellationToken);
+
+            if (!loadResult.IsSuccess || loadResult.Value is null)
+            {
+                ShowRecoveryFailure(
+                    loadResult.Diagnostics,
+                    "The recovery snapshot could not be opened.");
+                continue;
+            }
+
+            ApplyRecoveredDocument(loadResult.Value);
+            return;
+        }
+    }
+
+    internal async Task CaptureRecoverySnapshotAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (_recoveryStore is null || !IsModified || IsLoading || IsSaving)
+        {
+            return;
+        }
+
+        if (_documentDiagnostics.Any(
+                diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning))
+        {
+            if (!_recoveryUnavailableNoticeShown)
+            {
+                _recoveryUnavailableNoticeShown = true;
+                var notice =
+                    "Crash recovery is unavailable because this document contains "
+                    + "content the exporter cannot preserve.";
+                DiagnosticsSummary = string.IsNullOrWhiteSpace(DiagnosticsSummary)
+                    ? notice
+                    : $"{DiagnosticsSummary} {notice}";
+                StatusText = "Recovery snapshot skipped for unsupported content.";
+            }
+
+            return;
+        }
+
+        var result = await Task.Run(
+            () => _recoveryStore.Save(
+                _history.Current,
+                FilePath,
+                _timeProvider.GetUtcNow(),
+                cancellationToken),
+            cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            _recoveryWarningShown = false;
+            return;
+        }
+
+        if (_recoveryWarningShown)
+        {
+            return;
+        }
+
+        _recoveryWarningShown = true;
+        ErrorMessage =
+            "Could not write a recovery snapshot. Your document is still open; "
+            + "save it to keep your changes.";
+        StatusText = "Recovery snapshot failed. Editing is still available.";
+    }
+
+    public void Dispose()
+    {
+        StopAutosave();
+        _saveCancellation?.Dispose();
+        GC.SuppressFinalize(this);
+    }
 
     private async Task SaveAsync(bool saveAs)
     {
@@ -423,6 +659,18 @@ public partial class MainViewModel : ViewModelBase
         IsModified = false;
         ErrorMessage = string.Empty;
 
+        if (_recoveryStore is not null)
+        {
+            var cleanupResult = _recoveryStore.DeleteForDocument(
+                _history.Current.Id,
+                CancellationToken.None);
+            if (!cleanupResult.IsSuccess)
+            {
+                DiagnosticsSummary =
+                    "The recovery snapshot could not be removed after saving.";
+            }
+        }
+
         if (unsupportedWarnings.Length > 0)
         {
             _documentDiagnostics = [];
@@ -446,7 +694,75 @@ public partial class MainViewModel : ViewModelBase
         DocumentTitle = document.Title;
         IsModified = false;
         Layout = _layoutEngine.Layout(document);
+        _recoveryWarningShown = false;
+        _recoveryUnavailableNoticeShown = false;
         UpdateWindowTitle();
+    }
+
+    private void ApplyRecoveredDocument(RecoveredDocument recovered)
+    {
+        ApplyDocument(recovered.Document, filePath: null);
+        IsModified = true;
+        ErrorMessage = string.Empty;
+        DiagnosticsSummary = string.Empty;
+
+        var sourceName = string.IsNullOrWhiteSpace(recovered.SourcePath)
+            ? "an unsaved document"
+            : Path.GetFileName(recovered.SourcePath);
+        StatusText = $"Recovered unsaved draft from {sourceName}. Save As to keep a copy.";
+    }
+
+    private void StartAutosave()
+    {
+        if (_recoveryStore is null || _autosaveCancellation is not null)
+        {
+            return;
+        }
+
+        _autosaveCancellation = new CancellationTokenSource();
+        _ = RunAutosaveLoopAsync(_autosaveCancellation.Token);
+    }
+
+    private void StopAutosave()
+    {
+        var cancellation = _autosaveCancellation;
+        _autosaveCancellation = null;
+
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        cancellation.Cancel();
+        cancellation.Dispose();
+    }
+
+    private async Task RunAutosaveLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            while (true)
+            {
+                await Task.Delay(_autosaveInterval, cancellationToken);
+                await CaptureRecoverySnapshotAsync(cancellationToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void ShowRecoveryFailure(
+        IEnumerable<Diagnostic> diagnostics,
+        string fallbackMessage)
+    {
+        var reason = diagnostics
+            .FirstOrDefault(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)
+            ?.Message
+            ?? fallbackMessage;
+
+        ErrorMessage = reason;
+        StatusText = "Recovery snapshot action failed.";
     }
 
     private void UpdateWindowTitle()
