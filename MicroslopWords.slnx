@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/MicroslopWords.App/MicroslopWords.App.csproj" />
+    <Project Path="src/MicroslopWords.Cli/MicroslopWords.Cli.csproj" />
+    <Project Path="src/MicroslopWords.Core/MicroslopWords.Core.csproj" />
+    <Project Path="src/MicroslopWords.Formats.Docx/MicroslopWords.Formats.Docx.csproj" />
+    <Project Path="src/MicroslopWords.Layout/MicroslopWords.Layout.csproj" />
+    <Project Path="src/MicroslopWords.Rendering/MicroslopWords.Rendering.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/MicroslopWords.Core.Tests/MicroslopWords.Core.Tests.csproj" />
+    <Project Path="tests/MicroslopWords.Docx.Tests/MicroslopWords.Docx.Tests.csproj" />
+    <Project Path="tests/MicroslopWords.Layout.Tests/MicroslopWords.Layout.Tests.csproj" />
+    <Project Path="tests/MicroslopWords.Ui.Tests/MicroslopWords.Ui.Tests.csproj" />
+  </Folder>
+</Solution>
