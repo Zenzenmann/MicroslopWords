@@ -23,7 +23,9 @@ public partial class App : Application
             window.DataContext = new MainViewModel(
                 new AvaloniaDocxFilePicker(window),
                 new DocxDocumentLoader(),
-                new LayoutEngine());
+                new LayoutEngine(),
+                new DocxDocumentSaver(),
+                new AvaloniaSaveConfirmation(window));
 
             desktop.MainWindow = window;
         }
