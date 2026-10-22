@@ -1,0 +1,351 @@
+- id: "STORY-001"
+  title: Open a DOCX and render a read-only page preview
+  description: >-
+    Deliver the CAP-1 create/open foundation plus supported DOCX body import and
+    a safe read-only paginated preview under CAP-10 and CAP-12. Include
+    actionable failures, deterministic diagnostics, and one empty paragraph for
+    an empty body.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-001 and implement only that story. CAPs: CAP-1 partial,
+    CAP-10 provisional preview, CAP-12 partial. FRs: FR-1, FR-27 provisional,
+    FR-31 subset, FR-34 partial. ADs: AD-2, AD-3, AD-7, AD-9, AD-11, AD-15.
+    Critical: the preview is read-only; do not claim editing, caret, selection,
+    save, recovery, real shaping, or final pagination. Replace scaffold behavior
+    only where this story requires it.
+
+- id: "STORY-002"
+  title: Save, Save As, dirty state, and atomic writes
+  description: >-
+    Implement atomic Save/Save As, path and dirty-state rules, and export of
+    supported content for CAP-1 and CAP-12. Preserve the previous file and
+    unsaved state on any failure, cancellation, or unacknowledged loss.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-002 and implement only that story. CAPs: CAP-1, CAP-12
+    partial. FRs: FR-2, FR-3 dirty state, FR-32 subset, FR-33 subset. NFRs:
+    NFR-3, NFR-8. ADs: AD-8, AD-13, AD-14, AD-15. Critical: use a temporary
+    file plus atomic replacement, clear dirty state and change paths only after
+    success, default unsupported-content saves to Cancel, and cover injected
+    failures after temp creation and before replacement.
+
+- id: "STORY-003"
+  title: Crash recovery snapshots and restore prompt
+  description: >-
+    Add crash recovery snapshots, rotation, restore, and discard for CAP-1, with
+    private local storage and source-safe behavior. Warn on snapshot failure and
+    never write over the source document.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-003 and implement only that story. CAP: CAP-1. FRs:
+    FR-3. NFRs: NFR-3, NFR-9. ADs: AD-13, AD-15, AD-16. Critical: source files
+    are never opened for writing, snapshots are atomic and user-scoped, recovery
+    remains read-only until STORY-006, and no document text, filename, or path
+    may enter logs.
+
+- id: "STORY-004"
+  title: Deterministic font catalog and HarfBuzz text shaping
+  description: >-
+    Establish the deterministic FontCatalog and HarfBuzz shaping required by
+    CAP-10, with support for CAP-2 Unicode and CAP-5 font-family mapping. Block
+    font bundling on a recorded human policy and licensing review.
+  spec_checkpoint: true
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-004 and implement only that story. CAPs: CAP-10, CAP-2
+    shaping support, CAP-5 font-family support. FRs: FR-27, FR-4 shaping. NFR:
+    NFR-1. ADs: AD-5, AD-17, AD-20. Critical: obtain and record the human font
+    fallback/bundling and licensing decision before committing any font binary,
+    subset, or restricted asset; layout must use only the explicit catalog and
+    never discover system fonts, ambient culture, time, or randomness.
+
+- id: "STORY-005"
+  title: Pagination v2 and zoomable page canvas
+  description: >-
+    Implement deterministic pagination v2 and the zoomable, fit-capable page
+    canvas for CAP-10 and CAP-3 viewport geometry. Keep zoom display-only and
+    make page/line hit geometry usable by later editing overlays.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-005 and implement only that story. CAPs: CAP-10, CAP-3
+    partial, CAP-13 partial. FRs: FR-27, FR-28. NFR: NFR-1. ADs: AD-5, AD-6,
+    AD-11, AD-22. Critical: zoom must span 25-400%, anchor keyboard/menu zoom at
+    the viewport center and wheel zoom at the pointer, and never alter document
+    or pagination state; do not claim tables, images, headers, footers, or page
+    breaks.
+
+- id: "STORY-006"
+  title: Editable caret, text input, IME, and paragraph editing
+  description: >-
+    Make supported text editable through command-backed caret, Unicode/IME
+    input, grapheme deletion, paragraph split/merge, and soft breaks for CAP-2,
+    CAP-3, CAP-4, and CAP-10. Normalize logical selections and preserve the
+    one-paragraph minimum with undo.
+  spec_checkpoint: true
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-006 and implement only that story. CAPs: CAP-2, CAP-3
+    partial, CAP-4 partial, CAP-10 partial. FRs: FR-4, FR-5, FR-6, FR-7 basic,
+    FR-11 partial. NFR: NFR-2. ADs: AD-2, AD-3, AD-4, AD-12. Critical: every
+    edit is an invertible command, caret/selection use block/run/UTF-16 logical
+    identities with line affinity, IME text commits exactly once, and no edit
+    may leave zero paragraphs. This is the editable CAP-1 transition for
+    supported imported text only.
+
+- id: "STORY-007"
+  title: Selection, keyboard navigation, clipboard, and undo/redo
+  description: >-
+    Complete CAP-3 selection/navigation, CAP-4 clipboard/history, and partial
+    CAP-2 and CAP-10 behavior with mouse, keyboard, cut/copy/paste, and
+    undo/redo. Sanitize untrusted clipboard HTML and coalesce typing without
+    weakening exact history.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-007 and implement only that story. CAPs: CAP-3, CAP-4,
+    CAP-2 partial, CAP-10 partial. FRs: FR-7, FR-8, FR-9, FR-10, FR-11. NFR:
+    NFR-2. ADs: AD-3, AD-4, AD-12. Critical: one undo step per operation,
+    contiguous typing coalesces only until caret movement, formatting, or one
+    second, new edits clear redo, and clipboard HTML must not execute scripts,
+    fetch external references, or preserve unsupported markup.
+
+- id: "STORY-008"
+  title: Character formatting and formatting toolbar
+  description: >-
+    Add CAP-5 character formatting and the formatting toolbar, with CAP-10
+    relayout and CAP-12 run-property round-trip. Cover mixed state, toggles,
+    clearing, validation, and missing-font diagnostics.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-008 and implement only that story. CAPs: CAP-5, CAP-10
+    partial, CAP-12 partial. FRs: FR-12, FR-13 character. NFR: NFR-1. ADs:
+    AD-3, AD-5, AD-8. Critical: support font family, 1-400 pt size, bold,
+    italic, single underline, strikethrough, color, and highlight; preserve
+    unselected text, show mixed values as indeterminate, make clear-formatting
+    one undo step, and diagnose missing fonts without rewriting font names.
+
+- id: "STORY-009"
+  title: Paragraph formatting, lists, and page breaks
+  description: >-
+    Deliver CAP-5 paragraph formatting, nine-level lists, and page breaks,
+    including CAP-10 repagination and CAP-12 structural round-trip. Preserve
+    styles, undo, and visible numbering while rejecting invalid values.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-009 and implement only that story. CAPs: CAP-5, CAP-10
+    partial, CAP-12 partial. FRs: FR-13 paragraph, FR-14, FR-15. ADs: AD-3,
+    AD-5, AD-8. Critical: alignment, spacing, 0.5-3.0 line spacing, indents,
+    list levels 1-9, numbering continuation/restart, and selectable page-break
+    markers must round-trip as structure rather than literal characters.
+
+- id: "STORY-010"
+  title: Named styles and styles panel
+  description: >-
+    Implement CAP-5 named paragraph/character styles and the styles panel with
+    CAP-10 layout and CAP-12 style preservation. Support safe
+    create/edit/rename/delete, non-flattening import, and keyboard-first
+    application.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-010 and implement only that story. CAPs: CAP-5, CAP-10,
+    CAP-12. FRs: FR-16, FR-17. ADs: AD-2, AD-3, AD-8. Critical: built-ins include
+    Normal, Title, Heading 1-3, and the default character style; names are
+    unique case-insensitively, edits update all users except direct overrides,
+    deletion reassigns content safely, Normal/default character style cannot be
+    deleted, and import must not flatten styles.
+
+- id: "STORY-011"
+  title: Find and replace
+  description: >-
+    Deliver CAP-6 find/replace across runs plus partial CAP-4 and CAP-10
+    behavior, with case and whole-word options. Keep search read-only and make
+    Replace All one terminating undo step with inherited formatting.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-011 and implement only that story. CAPs: CAP-6, CAP-4
+    partial, CAP-10 partial. FRs: FR-18, FR-19. ADs: AD-3, AD-4, AD-11.
+    Critical: search body text across run boundaries, support case and whole-word
+    options, wrap with notice, leave the document unmutated on search, inherit
+    formatting at the match start, avoid replacement loops, and make Replace All
+    one undo step with the actual count.
+
+- id: "STORY-012"
+  title: Tables
+  description: >-
+    Build editable CAP-7 tables with navigation, restructure, formatting,
+    pagination, clipboard, and CAP-12 round-trip; extend CAP-4 and CAP-10. Keep
+    rows intact across pages, repeat headers, and follow the SPEC 20x20 minimum
+    over the narrower UX assumption.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-012 and implement only that story. CAPs: CAP-7, CAP-4
+    partial, CAP-10, CAP-12. FRs: FR-20, FR-21, FR-9/FR-10 table clipboard. NFR:
+    NFR-4. ADs: AD-2, AD-3, AD-5, AD-8, AD-14. Critical: support at least 20x20,
+    default 3x3 with a header row, merge/split, Tab navigation and append-row,
+    full cell editing, widths/borders/shading, row keep-together, repeated
+    headers, sanitized clipboard tables, and semantic DOCX round-trip; reject
+    nested tables.
+
+- id: "STORY-013"
+  title: Inline images
+  description: >-
+    Add CAP-8 inline images and CAP-4 clipboard behavior with CAP-10 layout and
+    CAP-12 media round-trip. Enforce format, size, decode, relationship, and
+    no-network safety limits, including labeled placeholders for corrupt media.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-013 and implement only that story. CAPs: CAP-8, CAP-4
+    partial, CAP-10, CAP-12. FRs: FR-22, FR-23. NFR: NFR-4. ADs: AD-3, AD-5,
+    AD-8, AD-14. Critical: accept PNG/JPEG and GIF first frame up to 50 MB,
+    reject SVG and oversized/decompression-bomb inputs, preserve aspect ratio by
+    default, support exact sizing and alt text, render corrupt-image
+    placeholders, and never fetch external media.
+
+- id: "STORY-014"
+  title: Headers, footers, and page numbers
+  description: >-
+    Implement CAP-9 per-section headers/footers, first-page variants,
+    link/unlink, and live page fields with CAP-10 and CAP-12 round-trip. Update
+    field values during pagination and warn rather than overlap body content.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-014 and implement only that story. CAPs: CAP-9, CAP-10,
+    CAP-11 partial, CAP-12. FRs: FR-24, FR-25, FR-26. ADs: AD-2, AD-3, AD-5,
+    AD-8. Critical: implement per-section first/default variants and
+    link/unlink, decimal/Roman/alphabetic page formats with start values and
+    restarts, Page X of Y fields, live updates after edits or page-setting
+    changes, header/footer mode with body read-only, overflow warnings, and
+    semantic DOCX round-trip; odd/even headers are out of scope.
+
+- id: "STORY-015"
+  title: Print and PDF export
+  description: >-
+    Add native printing and CAP-11 PDF export from the same CAP-10 layout, with
+    CAP-12 parity for supported content. Produce atomic, searchable,
+    font-embedded output and reject invalid ranges without changing the
+    document.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-015 and implement only that story. CAPs: CAP-11, CAP-10,
+    CAP-12 partial. FRs: FR-29, FR-30. NFRs: NFR-1, NFR-2. ADs: AD-5, AD-6,
+    AD-13, AD-15, AD-22. Critical: screen, print, and PDF consume the same
+    DocumentLayout; support all/current/range, match physical pages, embed or
+    subset fonts under the STORY-004 policy, preserve searchable text and
+    headers/images/footers/page numbers, leave no partial file or document
+    change on failure, and never launch Word, LibreOffice, or an external
+    converter.
+
+- id: "STORY-016"
+  title: DOCX fidelity, unsupported-content warnings, corpus, and security
+  description: >-
+    Complete CAP-12 fidelity classification, disclosure, preservation, corpus
+    round-trip, and package security, finishing CAP-1, CAP-5, CAP-7, CAP-8, and
+    CAP-9 round-trip and CAP-10 inputs. Gate unsupported saves, active content,
+    traversal, bombs, and limits without silent loss or privacy leaks.
+  spec_checkpoint: true
+  done_checkpoint: true
+  invoke_dev_with: >-
+    Read epics.md#story-016 and implement only that story. CAPs: CAP-12; CAP-1,
+    CAP-5, CAP-7, CAP-8, CAP-9 round-trip; CAP-10 inputs. FRs: FR-2 unsupported
+    save behavior, FR-31, FR-32, FR-33, FR-34. NFRs: NFR-3, NFR-4, NFR-7. ADs:
+    AD-7, AD-8, AD-9, AD-14, AD-15, AD-16, AD-17. Critical: use one support
+    matrix, preserve unknown non-active parts, never execute or fetch active
+    content, default lossy saves to Cancel with an explicit summary, enforce
+    250 MB/10,000 parts/100:1/50 MB limits and traversal rejection, log no
+    document content or paths, and require at least 30 owned/licensed offline
+    fixtures with 100% text and at least 95% supported-construct retention.
+    Pause after completion for the human checkpoint.
+
+- id: "STORY-017"
+  title: Accessibility, keyboard map, themes, and settings
+  description: >-
+    Deliver CAP-13 accessibility, keyboard, themes, and settings with
+    accessibility support for CAP-3, CAP-10, and CAP-11. Make all core journeys
+    operable, announce state changes, and keep settings private and persistent.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-017 and implement only that story. CAPs: CAP-13, CAP-3
+    accessibility, CAP-10 accessibility, CAP-11 accessibility. FRs: FR-35,
+    FR-36, FR-37, FR-38 partial. NFRs: NFR-5, NFR-9. ADs: AD-11, AD-16, AD-17.
+    Critical: provide logical focus order, a visible 2 px ring, F6 cycling,
+    Esc/focus return, accessible roles/names/states, polite state
+    announcements, high-contrast and 100-200% scaling support, non-color-only
+    meaning, light/dark/system themes with trustworthy page colors, a searchable
+    shortcut map with macOS Command support, and private settings containing no
+    document text or paths.
+
+- id: "STORY-018"
+  title: CLI inspect, validate, to-text, and export-pdf
+  description: >-
+    Implement CAP-14 inspect, validate, to-text, and export-pdf plus partial
+    CAP-11 and CAP-12 validation with deterministic output and the SPEC exit
+    contract. Require and enforce the ADR that widens CLI access to Layout and
+    Rendering only for PDF.
+  spec_checkpoint: true
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-018 and implement only that story. CAPs: CAP-14, CAP-11
+    partial, CAP-12 validation. FRs: FR-30 CLI, FR-39, FR-40. NFRs: NFR-4,
+    NFR-8. ADs: AD-1, AD-14, AD-15, AD-19. Critical: obtain an approved ADR
+    before adding Cli references to Layout/Rendering; Cli must still not
+    reference App, Avalonia, or UI. Use exit codes 0 success/help/version, 2
+    usage/missing/unreadable/malformed, 3 format/I/O/render/write or validation
+    findings, and 4 cancellation only; keep JSON ordering stable, stdout data
+    and stderr diagnostics separate, inputs read-only except explicit PDF
+    output, no prompts or network, and no partial output on failure.
+
+- id: "STORY-019"
+  title: Large-document performance and incremental layout
+  description: >-
+    Make large documents meet NFR-2 through revision/fingerprint invalidation,
+    immutable cache reuse, and stale-result discard for CAP-10, CAP-2, CAP-3,
+    and CAP-13. Prove incremental output matches full layout and stay within the
+    performance and memory budgets.
+  spec_checkpoint: false
+  done_checkpoint: false
+  invoke_dev_with: >-
+    Read epics.md#story-019 and implement only that story. CAPs: CAP-10, CAP-2
+    partial, CAP-3 partial, CAP-13 responsiveness. FRs: FR-27, FR-28, FR-4
+    performance. NFR: NFR-2. ADs: AD-5, AD-10, AD-13. Critical: CommandHistory
+    alone increments the monotonic revision; fingerprints cover revision, style
+    version, page settings, constraints, and font/shaping version; reuse only
+    immutable measurements with matching block ID/content/style/width/font
+    stack; drop stale async results; and meet the 50-page/20-image budgets of
+    3 s open, 50 ms p95 keystroke, 100 ms p95 scroll/zoom, 2 s save, 5 s PDF,
+    and 500 MB peak.
+
+- id: "STORY-020"
+  title: Cross-platform packaging and release smoke tests
+  description: >-
+    Ship self-contained cross-platform packages with CAP-13, partial CAP-11,
+    and partial CAP-14, including clean-VM release smoke tests and desktop/CLI
+    PDF parity. Enforce AD-18 secret handling, checksums, notices, offline
+    launch, and human-approved release policy.
+  spec_checkpoint: true
+  done_checkpoint: true
+  invoke_dev_with: >-
+    Read epics.md#story-020 and implement only that story. CAPs: CAP-13, CAP-11
+    partial, CAP-14 partial. FRs: FR-38. NFRs: NFR-6, NFR-7, NFR-9. ADs: AD-17,
+    AD-18, AD-20. Critical: publish self-contained .NET 10 artifacts for
+    win-x64, win-arm64, linux-x64, osx-x64, and osx-arm64; run all build, test,
+    golden, corpus, architecture, and format gates on Windows, macOS, and Linux;
+    launch offline and without admin or a separate runtime; keep signing and
+    notarization material only in CI secrets with no fabricated keys; version,
+    checksum, and include third-party notices; use the approved Linux packaging
+    format with a self-contained linux-x64 archive minimum; and exercise launch,
+    open/save, edit, table/image/header, print, PDF, CLI, recovery, and
+    desktop/CLI PDF parity in clean VMs. Pause after completion for the human
+    checkpoint.

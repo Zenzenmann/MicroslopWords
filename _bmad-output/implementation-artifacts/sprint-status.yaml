@@ -1,0 +1,67 @@
+# generated: 10-22-2026 21:29
+# last_updated: 10-22-2026 21:29
+# project: MicroslopWords
+# project_key: MICROSLOP
+# tracking_system: file-system
+# story_location: _bmad-output/implementation-artifacts/stories
+#
+# Sprint plan:
+#   Sprint 1 / Epic 1: STORY-001, STORY-002, STORY-003
+#   Sprint 2 / Epic 2: STORY-004, STORY-005
+#   Sprint 3 / Epic 3: STORY-006 through STORY-011
+#   Sprint 4 / Epic 4: STORY-012 through STORY-014
+#   Sprint 5 / Epic 5: STORY-015 through STORY-017
+#   Sprint 6 / Epic 6: STORY-018 through STORY-020
+#
+# STATUS DEFINITIONS:
+#   Epic: backlog, in-progress, done
+#   Story: backlog, ready-for-dev, in-progress, review, done
+#   Retrospective: optional, done
+
+generated: 10-22-2026 21:29
+last_updated: 10-22-2026 21:29
+project: MicroslopWords
+project_key: MICROSLOP
+tracking_system: file-system
+story_location: "_bmad-output/implementation-artifacts/stories"
+
+development_status:
+  epic-1: backlog
+  1-1-story-001-open-a-docx-and-render-a-read-only-page-preview: backlog
+  1-2-story-002-save-save-as-dirty-state-and-atomic-writes: backlog
+  1-3-story-003-crash-recovery-snapshots-and-restore-prompt: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-story-004-deterministic-font-catalog-and-harfbuzz-text-shaping: backlog
+  2-2-story-005-pagination-v2-and-zoomable-page-canvas: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-story-006-editable-caret-text-input-ime-and-paragraph-editing: backlog
+  3-2-story-007-selection-keyboard-navigation-clipboard-and-undo-redo: backlog
+  3-3-story-008-character-formatting-and-formatting-toolbar: backlog
+  3-4-story-009-paragraph-formatting-lists-and-page-breaks: backlog
+  3-5-story-010-named-styles-and-styles-panel: backlog
+  3-6-story-011-find-and-replace: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-story-012-tables: backlog
+  4-2-story-013-inline-images: backlog
+  4-3-story-014-headers-footers-and-page-numbers: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-story-015-print-and-pdf-export: backlog
+  5-2-story-016-docx-fidelity-unsupported-content-warnings-corpus-and-security: backlog
+  5-3-story-017-accessibility-keyboard-map-themes-and-settings: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-story-018-cli-inspect-validate-to-text-and-export-pdf: backlog
+  6-2-story-019-large-document-performance-and-incremental-layout: backlog
+  6-3-story-020-cross-platform-packaging-and-release-smoke-tests: backlog
+  epic-6-retrospective: optional
+
+action_items: []

@@ -1,0 +1,95 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="using:MicroslopWords.App.ViewModels"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        mc:Ignorable="d" d:DesignWidth="1280" d:DesignHeight="840"
+        x:Class="MicroslopWords.App.Views.MainWindow"
+        x:DataType="vm:MainViewModel"
+        Width="1280" Height="840"
+        MinWidth="960" MinHeight="640"
+        WindowStartupLocation="CenterScreen"
+        Title="MicroslopWords">
+
+    <Design.DataContext>
+        <vm:MainViewModel />
+    </Design.DataContext>
+
+    <DockPanel>
+        <Menu DockPanel.Dock="Top">
+            <MenuItem Header="_File">
+                <MenuItem Header="_New" Command="{Binding NewDocumentCommand}" />
+                <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
+                <MenuItem Header="_Save" Command="{Binding SaveDocumentCommand}" />
+                <Separator />
+                <MenuItem Header="E_xit" />
+            </MenuItem>
+            <MenuItem Header="_Edit">
+                <MenuItem Header="_Undo" />
+                <MenuItem Header="_Redo" />
+                <Separator />
+                <MenuItem Header="_Find" Command="{Binding FindCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Insert">
+                <MenuItem Header="_Table" />
+                <MenuItem Header="_Image..." />
+                <MenuItem Header="Page _Break" />
+            </MenuItem>
+            <MenuItem Header="_Format">
+                <MenuItem Header="_Bold" Command="{Binding ToggleBoldCommand}" />
+                <MenuItem Header="_Italic" Command="{Binding ToggleItalicCommand}" />
+                <MenuItem Header="_Underline" Command="{Binding ToggleUnderlineCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Help">
+                <MenuItem Header="_About MicroslopWords" />
+            </MenuItem>
+        </Menu>
+
+        <Border DockPanel.Dock="Top" Background="#F5F5F5" BorderBrush="#D8D8D8" BorderThickness="0,0,0,1" Padding="10,8">
+            <StackPanel Orientation="Horizontal" Spacing="6">
+                <Button Content="New" Command="{Binding NewDocumentCommand}" />
+                <Button Content="Open" Command="{Binding OpenDocumentCommand}" />
+                <Button Content="Save" Command="{Binding SaveDocumentCommand}" />
+                <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="6,0" />
+                <Button Content="B" FontWeight="Bold" Command="{Binding ToggleBoldCommand}" />
+                <Button Content="I" FontStyle="Italic" Command="{Binding ToggleItalicCommand}" />
+                <Button Content="U" Command="{Binding ToggleUnderlineCommand}" />
+                <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="6,0" />
+                <Button Content="Find" Command="{Binding FindCommand}" />
+            </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Bottom" Background="#F5F5F5" BorderBrush="#D8D8D8" BorderThickness="0,1,0,0" Padding="10,5">
+            <Grid ColumnDefinitions="*,Auto">
+                <TextBlock Text="{Binding StatusText}" FontSize="12" />
+                <TextBlock Grid.Column="1" Text="{Binding DocumentTitle}" FontSize="12" Foreground="#666666" />
+            </Grid>
+        </Border>
+
+        <Grid Background="#E8E8E8">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto">
+                <Border Background="White"
+                        Width="816" Height="1056"
+                        Margin="24"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Top"
+                        BoxShadow="0 2 10 0 #33000000">
+                    <Grid Margin="96,72">
+                        <StackPanel Spacing="12">
+                            <TextBlock Text="{Binding DocumentTitle}"
+                                       FontSize="28"
+                                       FontWeight="SemiBold" />
+                            <TextBlock Text="The editor canvas will render here."
+                                       FontSize="14"
+                                       Foreground="#888888" />
+                            <TextBlock Text="MicroslopWords is in bootstrap. Open a DOCX once STORY-006 lands."
+                                       FontSize="14"
+                                       Foreground="#888888"
+                                       TextWrapping="Wrap" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+            </ScrollViewer>
+        </Grid>
+    </DockPanel>
+</Window>
