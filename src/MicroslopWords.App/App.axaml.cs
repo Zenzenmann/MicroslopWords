@@ -20,12 +20,18 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = new MainWindow();
-            window.DataContext = new MainViewModel(
+            var viewModel = new MainViewModel(
                 new AvaloniaDocxFilePicker(window),
                 new DocxDocumentLoader(),
                 new LayoutEngine(),
                 new DocxDocumentSaver(),
-                new AvaloniaSaveConfirmation(window));
+                new AvaloniaSaveConfirmation(window),
+                new RecoverySnapshotStore(),
+                new AvaloniaRecoveryPrompt(window));
+
+            window.DataContext = viewModel;
+            window.Opened += async (_, _) => await viewModel.InitializeRecoveryAsync();
+            window.Closed += (_, _) => viewModel.Dispose();
 
             desktop.MainWindow = window;
         }
