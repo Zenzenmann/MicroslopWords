@@ -6,7 +6,7 @@ MicroslopWords aims to be a practical DOCX editor, not a clone of every Microsof
 
 ## Status
 
-Early bootstrap. The repository currently contains the architecture skeleton, CI, BMAD planning artifacts, and an automated story-to-PR harness. The editor is under active development.
+Early bootstrap. The repository currently contains the architecture skeleton, CI, BMAD planning artifacts, and an automated story-to-main harness. The editor is under active development.
 
 ## Planned v1 Scope
 
