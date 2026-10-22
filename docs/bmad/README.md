@@ -39,7 +39,7 @@ Run these in order. Each step must be approved before the next begins.
 9. **Test strategy** — `bmad-testarch-framework`, `bmad-testarch-ci`, `bmad-testarch-atdd`
    - Establishes the test harness, CI gates, and acceptance-test conventions.
 10. **Build** — `bmad-build` per story
-    - Implement, test, review, and open a PR.
+    - Implement, test, and merge after the gates pass.
 11. **Review** — `bmad-code-review`, `bmad-qa-generate-e2e-tests`
     - Review the diff and extend end-to-end coverage.
 12. **Triage** — `bmad-loop-sweep`
@@ -55,21 +55,21 @@ The unattended loop uses opencode:
 ./scripts/auto-build.ps1 -Story STORY-001
 ```
 
-The harness creates `story/<id>`, invokes `opencode run` with the story prompt, runs the local gates, retries up to three times, commits, pushes, and opens a PR. It never merges.
+The harness creates `story/<id>`, invokes `opencode run` with the story prompt, runs the local gates, retries up to three times, commits, pushes the story branch, and merges it to `main` only when every gate passes. A PR is optional and is the fallback when human review is required.
 
 ### Guardrails
 
-- `main` is protected and requires CI plus human review.
+- `main` receives only gate-passing story merges from the harness or human-approved PRs.
 - Agents work only on `story/<id>` branches.
 - Agents may not edit `SPEC.md`, architecture decisions, release workflows, or package versions without human review.
-- The loop stops after three failed attempts and records the blocker in `deferred-work.md`.
-- Token and wall-clock budgets are enforced per story.
+- The loop stops after three failed attempts, records the blocker in `deferred-work.md`, and leaves `main` untouched.
+- Never merge with failing gates, unresolved conflicts, protected-file changes, or potential secrets.
 
 ## Human Checkpoints
 
 - Approve the PRD, architecture, and `SPEC.md` before story generation.
 - Approve Sprint 1 stories before automation begins.
-- Review every PR. The loop opens PRs; it does not merge them.
+- Spot-check merged story changes. Open a PR instead when human review is required.
 - Approve any change to capability IDs or non-goals.
 
 ## References

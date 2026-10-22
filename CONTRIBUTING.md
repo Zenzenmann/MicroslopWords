@@ -36,7 +36,7 @@ dotnet run --project src/MicroslopWords.App
    dotnet test
    dotnet format --verify-no-changes
    ```
-6. Open a pull request. Describe the story, the behavior change, and the tests.
+6. Open a pull request, or merge the branch to `main` after the gates pass. Describe the story, the behavior change, and the tests.
 
 ## Commit Style
 
@@ -52,11 +52,11 @@ chore(ci): cache NuGet packages
 
 Keep commits focused. Do not mix refactors with behavior changes.
 
-## Pull Request Requirements
+## Merge and Pull Request Requirements
 
-- One story or one coherent change per PR.
+- One story or one coherent change per branch or PR.
 - CI must be green on Windows, Linux, and macOS.
-- New packages require a note in the PR and an entry in `Directory.Packages.props`.
+- New packages require a note in the change and an entry in `Directory.Packages.props`.
 - Architecture changes require an ADR in `docs/adr/`.
 - No secrets, generated binaries, or local tool output.
 

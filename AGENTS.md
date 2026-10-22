@@ -40,7 +40,7 @@ Dependency direction is one-way: Core must never depend on Avalonia, Open XML, S
 - Do not change public architecture or add a dependency without an ADR in `docs/adr/`.
 - Do not add a NuGet package version directly to a `.csproj`; add it to `Directory.Packages.props`.
 - Never commit secrets, webhook URLs, tokens, certificates, or signing keys.
-- Do not push to `main`. Work on `story/<id>` branches and open a PR.
+- Work on `story/<id>` branches. Completed stories may be merged to `main` by the harness after all gates pass; use a PR when human review is needed.
 
 ## Spec-Driven Workflow
 
@@ -82,11 +82,11 @@ A story is done only when:
 
 `scripts/auto-build.ps1` is the only supported unattended coding entry point. It must:
 
-- Refuse to run on a dirty tree or on `main`.
-- Create and work on `story/<id>`.
+- Refuse to run on a dirty tree; create and work on `story/<id>`.
 - Run build, tests, and format gates.
 - Retry at most 3 times, then write to `deferred-work.md` and stop.
-- Open a PR; never merge it.
+- Merge the completed story to `main` only after every gate passes; open a PR instead when human review is required.
+- Never merge with failing gates, unresolved conflicts, protected-file changes, or potential secrets.
 - Never edit `SPEC.md`, `architecture.md`, release workflows, or `Directory.Packages.props` without human review.
 
 ## Known Pitfalls

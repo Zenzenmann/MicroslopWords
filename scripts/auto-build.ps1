@@ -1,15 +1,15 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Run one BMAD story through opencode, verify the repository gates, and open a PR.
+    Run one BMAD story through opencode, verify the repository gates, and merge it to main.
 
 .DESCRIPTION
     This is the only supported unattended coding entry point. It refuses to run on a
     dirty tree, creates or switches to story/<id>, invokes the opencode development
     agent with the story prompt from stories.yaml, runs build/test/format gates,
-    retries at most -MaxAttempts times, commits, pushes, and opens a PR. It never
-    merges and never edits SPEC.md, architecture.md, release workflows, story
-    metadata, or Directory.Packages.props.
+    retries at most -MaxAttempts times, commits, pushes the story branch, and merges
+    to main only after every gate passes. It never edits SPEC.md, architecture.md,
+    release workflows, story metadata, or Directory.Packages.props.
 
 .EXAMPLE
     .\scripts\auto-build.ps1 -Story STORY-001
@@ -113,6 +113,7 @@ function Assert-ProtectedFilesUntouched {
         '^_bmad-output/planning-artifacts/specs/.*/SPEC\.md$',
         '^_bmad-output/planning-artifacts/specs/.*/stories\.yaml$',
         '^_bmad-output/planning-artifacts/architecture\.md$',
+        '^AGENTS\.md$',
         '^\.github/workflows/',
         '^Directory\.Packages\.props$'
     )
@@ -216,9 +217,6 @@ try {
     }
     if (-not (Get-Command opencode -ErrorAction SilentlyContinue)) {
         throw 'opencode was not found on PATH.'
-    }
-    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
-        throw 'GitHub CLI (gh) was not found on PATH.'
     }
 
     $dirty = @(git -C $repoRoot status --porcelain)
@@ -351,33 +349,41 @@ $invoke
     git -C $repoRoot push -u origin $branch
     if ($LASTEXITCODE -ne 0) { throw "git push failed for $branch." }
 
-    $prUrl = gh pr view $branch --json url --jq '.url' 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $prUrl) {
-        $prBody = @'
-## Story
+    Write-Host "Switching to main and merging $Story."
+    git -C $repoRoot switch main
+    if ($LASTEXITCODE -ne 0) { throw 'Could not switch to main.' }
 
-{0} - {1}
+    git -C $repoRoot pull --ff-only origin main
+    if ($LASTEXITCODE -ne 0) { throw 'Could not fast-forward main from origin.' }
 
-## Summary
-
-Automated implementation by `scripts/auto-build.ps1`.
-
-## Gates
-
-- `dotnet build MicroslopWords.slnx`
-- `dotnet test MicroslopWords.slnx --no-build`
-- `dotnet format --verify-no-changes`
-
-## Review notes
-
-- Human review is required before merging.
-- SPEC and architecture checkpoints still apply where the story requires them.
-'@ -f $Story, $title
-        $prUrl = gh pr create --base main --head $branch --title $commitMessage --body $prBody
-        if ($LASTEXITCODE -ne 0) { throw 'gh pr create failed.' }
+    $preMergeHead = (git -C $repoRoot rev-parse HEAD).Trim()
+    git -C $repoRoot merge --no-ff $branch -m "Merge ${Story}: $title"
+    if ($LASTEXITCODE -ne 0) {
+        git -C $repoRoot merge --abort 2>$null | Out-Null
+        throw "Merge of $branch into main failed."
     }
 
-    Write-Host "Story $Story is ready for review: $prUrl"
+    $mergeLog = Join-Path $logDir "$Story-merge.log"
+    $lastLog = $mergeLog
+    try {
+        Invoke-Gate -Name 'post-merge build' -Arguments @('build', 'MicroslopWords.slnx') -LogPath $mergeLog
+        Invoke-Gate -Name 'post-merge test' -Arguments @('test', 'MicroslopWords.slnx', '--no-build') -LogPath $mergeLog
+        Invoke-Gate -Name 'post-merge format' -Arguments @('format', '--verify-no-changes') -LogPath $mergeLog
+    }
+    catch {
+        git -C $repoRoot reset --hard $preMergeHead | Out-Null
+        git -C $repoRoot switch $branch | Out-Null
+        throw "Post-merge gate failed: $($_.Exception.Message)"
+    }
+
+    git -C $repoRoot push origin main
+    if ($LASTEXITCODE -ne 0) {
+        git -C $repoRoot reset --hard $preMergeHead | Out-Null
+        git -C $repoRoot switch $branch | Out-Null
+        throw 'git push failed for main.'
+    }
+
+    Write-Host "Merged $Story to main: $commitMessage"
     exit 0
 }
 catch {
