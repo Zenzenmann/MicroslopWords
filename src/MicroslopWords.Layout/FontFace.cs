@@ -22,8 +22,18 @@ public sealed class FontFace : IDisposable
         Weight = weight;
         Slant = slant;
         _stream = new MemoryStream(fontData, writable: false);
-        _blob = Blob.FromStream(_stream);
-        _face = new Face(_blob, 0);
+
+        try
+        {
+            _blob = Blob.FromStream(_stream);
+            _face = new Face(_blob, 0);
+        }
+        catch (DllNotFoundException)
+        {
+            _stream.Dispose();
+            throw;
+        }
+
         UnitsPerEm = _face.UnitsPerEm;
 
         if (GlyphCount <= 0)

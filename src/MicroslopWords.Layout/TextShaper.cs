@@ -11,14 +11,38 @@ public sealed class TextShaper : IDisposable
     public const double FallbackAdvanceRatio = 0.5;
 
     private readonly FontCatalog _catalog;
-    private readonly HarfBuzzSharp.Buffer _buffer = new();
+    private HarfBuzzSharp.Buffer? _buffer;
     private readonly Dictionary<FontKey, Font> _fonts = new();
+    private bool _harfbuzzAvailable = true;
 
     public TextShaper(FontCatalog catalog)
     {
         ArgumentNullException.ThrowIfNull(catalog);
         _catalog = catalog;
-        _buffer.ClusterLevel = ClusterLevel.MonotoneCharacters;
+    }
+
+    private HarfBuzzSharp.Buffer GetBuffer()
+    {
+        if (!_harfbuzzAvailable)
+        {
+            throw new InvalidOperationException("HarfBuzz is unavailable.");
+        }
+
+        if (_buffer is null)
+        {
+            try
+            {
+                _buffer = new HarfBuzzSharp.Buffer();
+                _buffer.ClusterLevel = ClusterLevel.MonotoneCharacters;
+            }
+            catch (DllNotFoundException)
+            {
+                _harfbuzzAvailable = false;
+                throw;
+            }
+        }
+
+        return _buffer;
     }
 
     public FontCatalog Catalog => _catalog;
@@ -81,14 +105,34 @@ public sealed class TextShaper : IDisposable
             }
         }
 
-        ShapeViaHarfBuzz(font, text, scale, out var advance, out var clusters);
+        try
+        {
+            ShapeViaHarfBuzz(font, text, scale, out var advance, out var clusters);
 
-        return new ShapedText(
-            text,
-            face.Key,
-            advance,
-            clusters,
-            Deduplicate(diagnostics));
+            return new ShapedText(
+                text,
+                face.Key,
+                advance,
+                clusters,
+                Deduplicate(diagnostics));
+        }
+        catch (DllNotFoundException)
+        {
+            _harfbuzzAvailable = false;
+
+            var fallback = BuildFallbackClusters(text, fontSizePoints);
+            diagnostics.Add(new Diagnostic(
+                LayoutDiagnosticCodes.FontSubstituted,
+                DiagnosticSeverity.Warning,
+                $"HarfBuzz is unavailable; text was measured with the default fallback."));
+
+            return new ShapedText(
+                text,
+                face.Key,
+                fallback.Advance,
+                fallback.Clusters,
+                Deduplicate(diagnostics));
+        }
     }
 
     public void Dispose()
@@ -98,7 +142,7 @@ public sealed class TextShaper : IDisposable
             font.Dispose();
         }
 
-        _buffer.Dispose();
+        _buffer?.Dispose();
     }
 
     private Font GetFont(FontFace face, int upem)
@@ -120,15 +164,16 @@ public sealed class TextShaper : IDisposable
         out double advance,
         out ImmutableArray<GlyphCluster> clusters)
     {
-        _buffer.ClearContents();
-        _buffer.AddUtf16(text, 0, text.Length);
-        _buffer.Direction = Direction.LeftToRight;
-        _buffer.Language = new Language(CultureInfo.InvariantCulture.Name);
-        _buffer.Script = Script.Parse(text);
-        font.Shape(_buffer, features: null);
+        var buffer = GetBuffer();
+        buffer.ClearContents();
+        buffer.AddUtf16(text, 0, text.Length);
+        buffer.Direction = Direction.LeftToRight;
+        buffer.Language = new Language(CultureInfo.InvariantCulture.Name);
+        buffer.Script = Script.Parse(text);
+        font.Shape(buffer, features: null);
 
-        var infos = _buffer.GlyphInfos;
-        var positions = _buffer.GlyphPositions;
+        var infos = buffer.GlyphInfos;
+        var positions = buffer.GlyphPositions;
 
         var clusterBuilder = ImmutableArray.CreateBuilder<GlyphCluster>();
         var totalAdvance = 0d;
