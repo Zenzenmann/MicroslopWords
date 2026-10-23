@@ -4,6 +4,10 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="HarfBuzzSharp" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\MicroslopWords.Core\MicroslopWords.Core.csproj" />
   </ItemGroup>
 </Project>

@@ -20,10 +20,11 @@ public partial class App : Application
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
             var window = new MainWindow();
+            var fontCatalog = CreateFontCatalog();
             var viewModel = new MainViewModel(
                 new AvaloniaDocxFilePicker(window),
                 new DocxDocumentLoader(),
-                new LayoutEngine(),
+                new LayoutEngine(fontCatalog),
                 new DocxDocumentSaver(),
                 new AvaloniaSaveConfirmation(window),
                 new RecoverySnapshotStore(),
@@ -37,5 +38,18 @@ public partial class App : Application
         }
 
         base.OnFrameworkInitializationCompleted();
+    }
+
+    private static FontCatalog CreateFontCatalog()
+    {
+        var directories = Environment
+            .GetEnvironmentVariable("MSW_FONT_DIRS")
+            ?.Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            ?? [];
+
+        var source = new DirectoryFontFaceSource(directories);
+        var faces = source.LoadFaces([]);
+
+        return faces.IsEmpty ? FontCatalog.Empty : FontCatalog.Create(faces);
     }
 }
