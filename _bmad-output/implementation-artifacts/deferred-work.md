@@ -6,7 +6,7 @@ Questions and decisions intentionally deferred from planning. Resolve the item a
 
 | ID | Question | Impact | Owner | Trigger |
 |---|---|---|---|---|
-| DEF-001 | Which fonts may be bundled, and what is the fallback/substitution policy when a DOCX requests an unavailable font? | Deterministic shaping, PDF embedding, licensing, package size | Product + legal review | Before `STORY-004` completes |
+| DEF-001 | Which fonts may be bundled, and what is the fallback/substitution policy when a DOCX requests an unavailable font? (STORY-004 shipped an interim catalog-plus-fallback policy in ADR 0004 with **no bundled fonts**; the human licensing/bundling decision is still required.) | Deterministic shaping, PDF embedding, licensing, package size | Product + legal review | Before any font is bundled and before `STORY-015` PDF embedding |
 | DEF-002 | Is the supported zoom range `25–400%` (SPEC) or `50–400%` (UX)? | Canvas behavior, tests, accessibility | Product + UX | Before `STORY-005` completes |
 | DEF-003 | Which header/footer variants ship in v1: first-page only, or also odd/even? | DOCX round-trip, pagination, UI | Product + architecture | During `STORY-014` |
 | DEF-004 | What is the minimum table size and the exact merge/split formatting behavior? | Table editing, DOCX fidelity, tests | Product + UX | During `STORY-012` |

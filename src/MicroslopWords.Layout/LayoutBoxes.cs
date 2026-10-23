@@ -2,7 +2,12 @@ using System.Collections.Immutable;
 
 namespace MicroslopWords.Layout;
 
-public sealed record LineLayout(string Text, LayoutRect Bounds, double FontSizePoints);
+public sealed record LineLayout(
+    string Text,
+    LayoutRect Bounds,
+    double FontSizePoints,
+    ImmutableArray<GlyphCluster> Clusters,
+    FontKey ResolvedFont);
 
 public sealed record ParagraphLayout(
     Guid ParagraphId,
@@ -17,4 +22,5 @@ public sealed record PageLayout(
 public sealed record DocumentLayout(
     ImmutableArray<PageLayout> Pages,
     double PageWidthPoints,
-    double PageHeightPoints);
+    double PageHeightPoints,
+    ImmutableArray<Core.Diagnostics.Diagnostic> Diagnostics);
