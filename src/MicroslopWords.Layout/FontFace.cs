@@ -25,6 +25,17 @@ public sealed class FontFace : IDisposable
         _blob = Blob.FromStream(_stream);
         _face = new Face(_blob, 0);
         UnitsPerEm = _face.UnitsPerEm;
+
+        if (GlyphCount <= 0)
+        {
+            _face.Dispose();
+            _blob.Dispose();
+            _stream.Dispose();
+
+            throw new ArgumentException(
+                "Font data does not contain any glyphs.",
+                nameof(fontData));
+        }
     }
 
     public string Family { get; }

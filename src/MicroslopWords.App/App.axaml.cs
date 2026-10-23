@@ -48,8 +48,10 @@ public partial class App : Application
             ?? [];
 
         var source = new DirectoryFontFaceSource(directories);
-        var faces = source.LoadFaces([]);
+        var result = source.LoadFaces([]);
 
-        return faces.IsEmpty ? FontCatalog.Empty : FontCatalog.Create(faces);
+        return result.Faces.IsEmpty
+            ? FontCatalog.Create([], diagnostics: result.Diagnostics)
+            : FontCatalog.Create(result.Faces, diagnostics: result.Diagnostics);
     }
 }

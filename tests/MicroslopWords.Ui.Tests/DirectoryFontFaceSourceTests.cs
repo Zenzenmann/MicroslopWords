@@ -13,7 +13,7 @@ public sealed class DirectoryFontFaceSourceTests
             Path.Combine(Path.GetTempPath(), "msw-missing-" + Guid.NewGuid().ToString("N")),
         ]);
 
-        source.LoadFaces([]).ShouldBeEmpty();
+        source.LoadFaces([]).Faces.ShouldBeEmpty();
     }
 
     [Fact]
@@ -33,7 +33,8 @@ public sealed class DirectoryFontFaceSourceTests
             File.WriteAllBytes(Path.Combine(directory, "Contoso-Bold.ttf"), fontBytes);
 
             var source = new DirectoryFontFaceSource([directory]);
-            var faces = source.LoadFaces([]);
+            var result = source.LoadFaces([]);
+            var faces = result.Faces;
 
             faces.Length.ShouldBe(1);
             faces[0].Family.ShouldBe("Contoso");
@@ -68,7 +69,8 @@ public sealed class DirectoryFontFaceSourceTests
             File.WriteAllBytes(Path.Combine(directory, "Contoso.otf"), fontBytes);
 
             var source = new DirectoryFontFaceSource([directory]);
-            var faces = source.LoadFaces([]);
+            var result = source.LoadFaces([]);
+            var faces = result.Faces;
 
             faces.Length.ShouldBe(1);
             faces[0].Family.ShouldBe("Contoso");

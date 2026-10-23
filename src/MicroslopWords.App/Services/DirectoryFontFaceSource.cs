@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Layout;
 
 namespace MicroslopWords.App.Services;
@@ -20,9 +21,10 @@ public sealed class DirectoryFontFaceSource : IFontFaceSource
             .ToImmutableArray();
     }
 
-    public ImmutableArray<FontFace> LoadFaces(ImmutableArray<string> fallbackFamilies)
+    public FontFaceSourceResult LoadFaces(ImmutableArray<string> fallbackFamilies)
     {
         var faces = ImmutableArray.CreateBuilder<FontFace>();
+        var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
 
         foreach (var directory in _directories)
         {
@@ -53,17 +55,20 @@ public sealed class DirectoryFontFaceSource : IFontFaceSource
                 {
                     bytes = File.ReadAllBytes(file);
                 }
-                catch (IOException)
+                catch (IOException exception)
                 {
+                    diagnostics.Add(Rejected(file, exception.Message));
                     continue;
                 }
-                catch (UnauthorizedAccessException)
+                catch (UnauthorizedAccessException exception)
                 {
+                    diagnostics.Add(Rejected(file, exception.Message));
                     continue;
                 }
 
                 if (bytes.Length == 0)
                 {
+                    diagnostics.Add(Rejected(file, "Font file is empty."));
                     continue;
                 }
 
@@ -71,15 +76,21 @@ public sealed class DirectoryFontFaceSource : IFontFaceSource
                 {
                     faces.Add(new FontFace(family, weight, slant, bytes));
                 }
-                catch (ArgumentException)
+                catch (ArgumentException exception)
                 {
-                    continue;
+                    diagnostics.Add(Rejected(file, exception.Message));
                 }
             }
         }
 
-        return faces.ToImmutable();
+        return new FontFaceSourceResult(faces.ToImmutable(), diagnostics.ToImmutable());
     }
+
+    private static Diagnostic Rejected(string file, string reason) =>
+        new(
+            LayoutDiagnosticCodes.FontUnreadable,
+            DiagnosticSeverity.Warning,
+            $"Font {Path.GetFileName(file)} was rejected: {reason}");
 
     private static (string? Family, FontWeight Weight, FontSlant Slant) ParseFileName(string file)
     {

@@ -1,9 +1,14 @@
 using System.Collections.Immutable;
+using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Layout;
 
 namespace MicroslopWords.App.Services;
 
+public sealed record FontFaceSourceResult(
+    ImmutableArray<FontFace> Faces,
+    ImmutableArray<Diagnostic> Diagnostics);
+
 public interface IFontFaceSource
 {
-    ImmutableArray<FontFace> LoadFaces(ImmutableArray<string> fallbackFamilies);
+    FontFaceSourceResult LoadFaces(ImmutableArray<string> fallbackFamilies);
 }
