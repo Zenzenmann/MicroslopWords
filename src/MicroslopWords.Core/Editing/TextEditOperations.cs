@@ -54,6 +54,83 @@ internal static class TextEditOperations
             new TextPosition(paragraph.Id, updatedRun.Id, position.Offset + text.Length));
     }
 
+    public static (Document Document, TextPosition Caret) InsertFragment(
+        Document document,
+        TextPosition caret,
+        DocumentFragment fragment)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(fragment);
+
+        caret = TextNavigation.Normalize(document, caret);
+
+        if (fragment.IsEmpty)
+        {
+            return (document, caret);
+        }
+
+        var paragraph = document.FindParagraph(caret.ParagraphId)
+            ?? throw new InvalidOperationException("The insertion paragraph was not found.");
+
+        var (prefix, suffix) = SplitRuns(paragraph, caret);
+
+        if (fragment.Paragraphs.Length == 1)
+        {
+            var inserted = fragment.Paragraphs[0].Runs
+                .Select(CloneRun)
+                .ToImmutableArray();
+            var runs = prefix.AddRange(inserted).AddRange(suffix);
+            var updated = paragraph with
+            {
+                Runs = runs,
+                Properties = paragraph.PlainText.Length == 0
+                    ? fragment.Paragraphs[0].Properties
+                    : paragraph.Properties,
+            };
+
+            return (
+                document.ReplaceBlock(updated),
+                CaretAfterInserted(updated, prefix, inserted));
+        }
+
+        var firstInserted = fragment.Paragraphs[0].Runs
+            .Select(CloneRun)
+            .ToImmutableArray();
+        var first = paragraph with
+        {
+            Runs = prefix.AddRange(firstInserted),
+            Properties = paragraph.PlainText.Length == 0
+                ? fragment.Paragraphs[0].Properties
+                : paragraph.Properties,
+        };
+        var previousId = first.Id;
+        var updatedDocument = document.ReplaceBlock(first);
+        ParagraphBlock? last = null;
+        ImmutableArray<Run> lastInserted = [];
+
+        for (var index = 1; index < fragment.Paragraphs.Length; index++)
+        {
+            var source = fragment.Paragraphs[index];
+            var inserted = source.Runs.Select(CloneRun).ToImmutableArray();
+            lastInserted = inserted;
+            var isLast = index == fragment.Paragraphs.Length - 1;
+            var runs = isLast ? inserted.AddRange(suffix) : inserted;
+            var insertedParagraph = new ParagraphBlock(
+                Guid.NewGuid(),
+                runs,
+                source.Properties);
+
+            updatedDocument = updatedDocument.InsertBlockAfter(previousId, insertedParagraph);
+            previousId = insertedParagraph.Id;
+            last = insertedParagraph;
+        }
+
+        var finalCaret = last is null
+            ? CaretAfterInserted(first, prefix, firstInserted)
+            : CaretAfterInserted(last, [], lastInserted);
+
+        return (updatedDocument, finalCaret);
+    }
     public static (Document Document, TextPosition Caret) DeleteRange(
         Document document,
         TextPosition start,
@@ -367,5 +444,67 @@ internal static class TextEditOperations
 
         location = default;
         return false;
+    }
+
+    private static (ImmutableArray<Run> Prefix, ImmutableArray<Run> Suffix) SplitRuns(
+        ParagraphBlock paragraph,
+        TextPosition caret)
+    {
+        if (paragraph.Runs.Length == 0)
+        {
+            return ([], []);
+        }
+
+        var runIndex = TextNavigation.FindRunIndex(paragraph, caret.RunId);
+
+        if (runIndex < 0)
+        {
+            runIndex = 0;
+        }
+
+        var run = paragraph.Runs[runIndex];
+        var offset = Math.Clamp(caret.Offset, 0, run.Text.Length);
+        var prefix = ImmutableArray.CreateBuilder<Run>();
+        var suffix = ImmutableArray.CreateBuilder<Run>();
+
+        for (var index = 0; index < runIndex; index++)
+        {
+            prefix.Add(paragraph.Runs[index]);
+        }
+
+        prefix.Add(run with { Text = run.Text[..offset] });
+        suffix.Add(new Run(Guid.NewGuid(), run.Text[offset..], run.Properties));
+
+        for (var index = runIndex + 1; index < paragraph.Runs.Length; index++)
+        {
+            suffix.Add(paragraph.Runs[index]);
+        }
+
+        return (prefix.ToImmutable(), suffix.ToImmutable());
+    }
+
+    private static Run CloneRun(RunFragment fragment) =>
+        new(Guid.NewGuid(), fragment.Text, fragment.Properties);
+
+    private static TextPosition CaretAfterInserted(
+        ParagraphBlock paragraph,
+        ImmutableArray<Run> prefix,
+        ImmutableArray<Run> inserted)
+    {
+        if (inserted.Length > 0)
+        {
+            var last = inserted[^1];
+
+            return new TextPosition(paragraph.Id, last.Id, last.Text.Length);
+        }
+
+        if (prefix.Length > 0)
+        {
+            var last = prefix[^1];
+
+            return new TextPosition(paragraph.Id, last.Id, last.Text.Length);
+        }
+
+        return TextNavigation.StartOf(paragraph);
     }
 }

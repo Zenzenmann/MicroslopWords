@@ -28,7 +28,8 @@ public partial class App : Application
                 new DocxDocumentSaver(),
                 new AvaloniaSaveConfirmation(window),
                 new RecoverySnapshotStore(),
-                new AvaloniaRecoveryPrompt(window));
+                new AvaloniaRecoveryPrompt(window),
+                new AvaloniaClipboardService(window));
 
             window.DataContext = viewModel;
             window.Opened += async (_, _) => await viewModel.InitializeRecoveryAsync();

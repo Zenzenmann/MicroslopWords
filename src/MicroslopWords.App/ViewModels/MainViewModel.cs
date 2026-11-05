@@ -30,6 +30,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     private readonly IRecoveryPrompt? _recoveryPrompt;
     private readonly TimeSpan _autosaveInterval;
     private readonly TimeProvider _timeProvider;
+    private readonly IClipboardService _clipboardService;
     private readonly LayoutEngine _layoutEngine;
     private CommandHistory _history;
     private IReadOnlyList<Diagnostic> _documentDiagnostics = [];
@@ -90,7 +91,8 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         IDocxDocumentSaver documentSaver,
         ISaveConfirmation saveConfirmation,
         IRecoverySnapshotStore recoveryStore,
-        IRecoveryPrompt recoveryPrompt)
+        IRecoveryPrompt recoveryPrompt,
+        IClipboardService? clipboardService = null)
         : this(
             filePicker,
             documentLoader,
@@ -100,7 +102,8 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
             recoveryStore,
             recoveryPrompt,
             DefaultAutosaveInterval,
-            TimeProvider.System)
+            TimeProvider.System,
+            clipboardService)
     {
     }
 
@@ -135,7 +138,8 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         IRecoverySnapshotStore? recoveryStore,
         IRecoveryPrompt? recoveryPrompt,
         TimeSpan autosaveInterval,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IClipboardService? clipboardService = null)
     {
         ArgumentNullException.ThrowIfNull(filePicker);
         ArgumentNullException.ThrowIfNull(documentLoader);
@@ -165,7 +169,10 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         _recoveryPrompt = recoveryPrompt;
         _autosaveInterval = autosaveInterval;
         _timeProvider = timeProvider;
-        _history = new CommandHistory(Document.CreateEmpty());
+        _clipboardService = clipboardService ?? UnavailableClipboardService.Instance;
+        _history = new CommandHistory(
+            Document.CreateEmpty(),
+            timeProvider: _timeProvider);
 
         ApplyDocument(_history.Current, filePath: null);
         StatusText = "Ready.";
@@ -421,6 +428,137 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         FinishEdit();
     }
 
+    public bool HasSelection => !_history.Selection.IsCollapsed;
+
+    public bool CanCopy => HasSelection;
+
+    public bool CanCut => HasSelection && IsEditingEnabled;
+
+    public bool CanPaste => IsEditingEnabled;
+
+    public bool CanSelectAll => Document.Sections
+        .SelectMany(section => section.Blocks)
+        .OfType<ParagraphBlock>()
+        .Any();
+
+    [RelayCommand(CanExecute = nameof(CanCopy))]
+    private async Task CopyAsync()
+    {
+        if (!HasSelection)
+        {
+            return;
+        }
+
+        var content = CreateClipboardContent();
+        var success = await _clipboardService.WriteAsync(content);
+
+        if (success)
+        {
+            StatusText = "Copied.";
+        }
+        else
+        {
+            StatusText = "Clipboard is unavailable.";
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCut))]
+    private async Task CutAsync()
+    {
+        if (!HasSelection || !IsEditingEnabled)
+        {
+            return;
+        }
+
+        var selection = _history.Selection;
+        var content = CreateClipboardContent();
+        var success = await _clipboardService.WriteAsync(content);
+
+        if (!success)
+        {
+            StatusText = "Clipboard is unavailable.";
+            return;
+        }
+
+        ExecuteEdit(new DeleteSelectionCommand(selection));
+        StatusText = "Cut.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanPaste))]
+    private async Task PasteAsync()
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        var content = await _clipboardService.ReadAsync();
+
+        if (content is null)
+        {
+            StatusText = "Clipboard is unavailable.";
+            return;
+        }
+
+        var fragment = content.Fragment;
+
+        if ((fragment is null || fragment.IsEmpty)
+            && !string.IsNullOrWhiteSpace(content.Html))
+        {
+            fragment = ClipboardHtml.Parse(content.Html);
+        }
+
+        if (fragment is { IsEmpty: false })
+        {
+            ExecuteEdit(new PasteFragmentCommand(_history.Selection, fragment));
+            StatusText = "Pasted.";
+            return;
+        }
+
+        if (!string.IsNullOrEmpty(content.Text))
+        {
+            ExecuteEdit(new PasteTextCommand(_history.Selection, content.Text));
+            StatusText = "Pasted.";
+            return;
+        }
+
+        StatusText = content.HasImage
+            ? "Image paste is not available yet."
+            : "Clipboard is empty.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanSelectAll))]
+    private void SelectAll()
+    {
+        var start = Selection.StartOf(Document);
+        var end = Selection.EndOf(Document);
+
+        Selection = new Selection(start.Focus, end.Focus);
+        StatusText = "Selected all.";
+    }
+
+    private ClipboardContent CreateClipboardContent()
+    {
+        var fragment = DocumentFragment.Capture(Document, _history.Selection);
+
+        return new ClipboardContent(
+            fragment.PlainText,
+            ClipboardHtml.ToHtml(fragment),
+            fragment);
+    }
+
+    private void NotifyClipboardCommands()
+    {
+        OnPropertyChanged(nameof(HasSelection));
+        OnPropertyChanged(nameof(CanCopy));
+        OnPropertyChanged(nameof(CanCut));
+        OnPropertyChanged(nameof(CanPaste));
+        OnPropertyChanged(nameof(CanSelectAll));
+        CopyCommand.NotifyCanExecuteChanged();
+        CutCommand.NotifyCanExecuteChanged();
+        PasteCommand.NotifyCanExecuteChanged();
+        SelectAllCommand.NotifyCanExecuteChanged();
+    }
     public void InsertText(string text)
     {
         if (!IsEditingEnabled || string.IsNullOrEmpty(text))
@@ -565,6 +703,8 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         {
             _updatingSelection = false;
         }
+
+        NotifyClipboardCommands();
     }
 
     private void NotifyHistoryCommands()
@@ -633,9 +773,13 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         {
             SyncSelectionFromHistory();
         }
+
+        NotifyClipboardCommands();
     }
 
     partial void OnIsReadOnlyChanged(bool value) => NotifyEditingEnabledChanged();
+
+    partial void OnDocumentChanged(Document value) => NotifyClipboardCommands();
 
     partial void OnIsLoadingChanged(bool value)
     {
@@ -661,6 +805,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         ToggleItalicCommand.NotifyCanExecuteChanged();
         ToggleUnderlineCommand.NotifyCanExecuteChanged();
         FindCommand.NotifyCanExecuteChanged();
+        NotifyClipboardCommands();
     }
 
     partial void OnErrorMessageChanged(string value) =>
@@ -936,7 +1081,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         string? filePath,
         IReadOnlyList<Diagnostic>? diagnostics = null)
     {
-        _history = new CommandHistory(document);
+        _history = new CommandHistory(document, timeProvider: _timeProvider);
         _documentDiagnostics = diagnostics ?? [];
         IsReadOnly = _documentDiagnostics.Any(
             diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning);

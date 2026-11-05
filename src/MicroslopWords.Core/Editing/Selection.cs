@@ -301,6 +301,123 @@ public static class TextNavigation
             : StartOf(nextParagraph);
     }
 
+    public static TextPosition PreviousWord(Document document, TextPosition position)
+    {
+        position = Normalize(document, position);
+        var paragraph = document.FindParagraph(position.ParagraphId)!;
+
+        if (paragraph.Runs.Length == 0)
+        {
+            var previousEmpty = PreviousParagraph(document, paragraph.Id);
+
+            return previousEmpty is null
+                ? StartOf(paragraph)
+                : EndOf(previousEmpty);
+        }
+
+        var offset = GetParagraphTextOffset(paragraph, position.RunId, position.Offset);
+
+        if (offset == 0)
+        {
+            var previous = PreviousParagraph(document, paragraph.Id);
+
+            return previous is null ? StartOf(paragraph) : EndOf(previous);
+        }
+
+        var boundary = GraphemeText.PreviousWordBoundary(paragraph.PlainText, offset);
+
+        return FromParagraphTextOffset(paragraph, boundary, TextAffinity.Upstream);
+    }
+
+    public static TextPosition NextWord(Document document, TextPosition position)
+    {
+        position = Normalize(document, position);
+        var paragraph = document.FindParagraph(position.ParagraphId)!;
+
+        if (paragraph.Runs.Length == 0)
+        {
+            var nextEmpty = NextParagraph(document, paragraph.Id);
+
+            return nextEmpty is null
+                ? EndOf(paragraph)
+                : StartOf(nextEmpty);
+        }
+
+        var offset = GetParagraphTextOffset(paragraph, position.RunId, position.Offset);
+
+        if (offset >= paragraph.PlainText.Length)
+        {
+            var next = NextParagraph(document, paragraph.Id);
+
+            return next is null ? EndOf(paragraph) : StartOf(next);
+        }
+
+        var boundary = GraphemeText.NextWordBoundary(paragraph.PlainText, offset);
+
+        return FromParagraphTextOffset(paragraph, boundary);
+    }
+
+    public static Selection GetWordSelection(Document document, TextPosition position)
+    {
+        position = Normalize(document, position);
+        var paragraph = document.FindParagraph(position.ParagraphId)!;
+        var text = paragraph.PlainText;
+
+        if (text.Length == 0)
+        {
+            return Selection.Caret(position);
+        }
+
+        var offset = GetParagraphTextOffset(paragraph, position.RunId, position.Offset);
+        var starts = StringInfo.ParseCombiningCharacters(text);
+        var search = Array.BinarySearch(starts, offset);
+        var graphemeIndex = search >= 0
+            ? search
+            : Math.Max(0, ~search - 1);
+
+        if (graphemeIndex >= starts.Length)
+        {
+            graphemeIndex = starts.Length - 1;
+        }
+
+        var startIndex = graphemeIndex;
+        var endIndex = graphemeIndex;
+
+        if (GraphemeText.IsWord(text, starts[graphemeIndex]))
+        {
+            while (startIndex > 0 && GraphemeText.IsWord(text, starts[startIndex - 1]))
+            {
+                startIndex--;
+            }
+
+            while (endIndex + 1 < starts.Length
+                && GraphemeText.IsWord(text, starts[endIndex + 1]))
+            {
+                endIndex++;
+            }
+        }
+
+        var start = FromParagraphTextOffset(paragraph, starts[startIndex]);
+        var end = FromParagraphTextOffset(
+            paragraph,
+            endIndex + 1 < starts.Length ? starts[endIndex + 1] : text.Length,
+            TextAffinity.Upstream);
+
+        return new Selection(start, end);
+    }
+
+    public static Selection GetParagraphSelection(Document document, TextPosition position)
+    {
+        position = Normalize(document, position);
+        var paragraph = document.FindParagraph(position.ParagraphId)!;
+        var start = StartOf(paragraph);
+        var end = FromParagraphTextOffset(
+            paragraph,
+            paragraph.PlainText.Length,
+            TextAffinity.Upstream);
+
+        return new Selection(start, end);
+    }
     public static bool IsAtParagraphStart(Document document, TextPosition position)
     {
         position = Normalize(document, position);
@@ -554,13 +671,13 @@ internal static class GraphemeText
         return index < starts.Length ? starts[index] : text.Length;
     }
 
-    private static bool IsWhitespace(string text, int index)
+    public static bool IsWhitespace(string text, int index)
     {
         var rune = Rune.GetRuneAt(text, index);
         return Rune.IsWhiteSpace(rune);
     }
 
-    private static bool IsWord(string text, int index)
+    public static bool IsWord(string text, int index)
     {
         var rune = Rune.GetRuneAt(text, index);
 

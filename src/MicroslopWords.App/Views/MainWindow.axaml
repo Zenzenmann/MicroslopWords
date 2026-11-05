@@ -31,6 +31,14 @@
         <KeyBinding Gesture="Meta+Z" Command="{Binding UndoCommand}" />
         <KeyBinding Gesture="Meta+Y" Command="{Binding RedoCommand}" />
         <KeyBinding Gesture="Meta+Shift+Z" Command="{Binding RedoCommand}" />
+        <KeyBinding Gesture="Ctrl+X" Command="{Binding CutCommand}" />
+        <KeyBinding Gesture="Ctrl+C" Command="{Binding CopyCommand}" />
+        <KeyBinding Gesture="Ctrl+V" Command="{Binding PasteCommand}" />
+        <KeyBinding Gesture="Ctrl+A" Command="{Binding SelectAllCommand}" />
+        <KeyBinding Gesture="Meta+X" Command="{Binding CutCommand}" />
+        <KeyBinding Gesture="Meta+C" Command="{Binding CopyCommand}" />
+        <KeyBinding Gesture="Meta+V" Command="{Binding PasteCommand}" />
+        <KeyBinding Gesture="Meta+A" Command="{Binding SelectAllCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -46,6 +54,11 @@
             <MenuItem Header="_Edit">
                 <MenuItem Header="_Undo" Command="{Binding UndoCommand}" />
                 <MenuItem Header="_Redo" Command="{Binding RedoCommand}" />
+                <Separator />
+                <MenuItem Header="Cu_t" Command="{Binding CutCommand}" />
+                <MenuItem Header="_Copy" Command="{Binding CopyCommand}" />
+                <MenuItem Header="_Paste" Command="{Binding PasteCommand}" />
+                <MenuItem Header="Select _All" Command="{Binding SelectAllCommand}" />
                 <Separator />
                 <MenuItem Header="_Find" Command="{Binding FindCommand}" />
             </MenuItem>

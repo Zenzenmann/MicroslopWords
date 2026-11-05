@@ -71,6 +71,7 @@ public sealed class DocumentPreviewControl : Control
     private double? _pointerAnchorX;
     private double? _pointerAnchorY;
     private string _compositionText = string.Empty;
+    private bool _isSelecting;
 
     public DocumentPreviewControl()
     {
@@ -305,16 +306,88 @@ public sealed class DocumentPreviewControl : Control
 
         Focus();
 
-        if (SetCaretFromContentPoint(
-            e.GetPosition(this),
-            (e.KeyModifiers & KeyModifiers.Shift) != 0))
+        if (Document is null || Layout is null
+            || !TryGetTextPosition(e.GetPosition(this), out var position))
         {
-            e.Handled = true;
+            return;
+        }
+
+        if (e.ClickCount >= 3)
+        {
+            Selection = TextNavigation.GetParagraphSelection(Document, position);
+        }
+        else if (e.ClickCount == 2)
+        {
+            Selection = TextNavigation.GetWordSelection(Document, position);
+        }
+        else
+        {
+            SetCaret(position, (e.KeyModifiers & KeyModifiers.Shift) != 0);
+            _isSelecting = true;
+            e.Pointer.Capture(this);
+        }
+
+        e.Handled = true;
+    }
+
+    protected override void OnPointerMoved(PointerEventArgs e)
+    {
+        base.OnPointerMoved(e);
+
+        if (_isSelecting
+            && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            SetCaretFromContentPoint(e.GetPosition(this), extend: true);
         }
     }
 
+    protected override void OnPointerReleased(PointerReleasedEventArgs e)
+    {
+        if (_isSelecting)
+        {
+            _isSelecting = false;
+            e.Pointer.Capture(null);
+        }
+
+        base.OnPointerReleased(e);
+    }
+
+    internal bool SelectWordAt(Point contentPoint)
+    {
+        if (Document is null || !TryGetTextPosition(contentPoint, out var position))
+        {
+            return false;
+        }
+
+        Selection = TextNavigation.GetWordSelection(Document, position);
+        return true;
+    }
+
+    internal bool SelectParagraphAt(Point contentPoint)
+    {
+        if (Document is null || !TryGetTextPosition(contentPoint, out var position))
+        {
+            return false;
+        }
+
+        Selection = TextNavigation.GetParagraphSelection(Document, position);
+        return true;
+    }
     internal bool SetCaretFromContentPoint(Point contentPoint, bool extend)
     {
+        if (!TryGetTextPosition(contentPoint, out var position))
+        {
+            return false;
+        }
+
+        SetCaret(position, extend);
+        return true;
+    }
+
+    private bool TryGetTextPosition(Point contentPoint, out TextPosition position)
+    {
+        position = default;
+
         if (Document is null
             || Layout is null
             || !TryGetPageAt(contentPoint, out var page, out var pageRect, out _))
@@ -339,15 +412,12 @@ public sealed class DocumentPreviewControl : Control
             return false;
         }
 
-        SetCaret(
-            TextNavigation.FromParagraphTextOffset(
-                paragraph,
-                hit.Value.ParagraphOffset),
-            extend);
+        position = TextNavigation.FromParagraphTextOffset(
+            paragraph,
+            hit.Value.ParagraphOffset);
 
         return true;
     }
-
     protected override void OnKeyDown(KeyEventArgs e)
     {
         if (HandleKey(e.Key, e.KeyModifiers))
@@ -384,12 +454,16 @@ public sealed class DocumentPreviewControl : Control
         {
             case Key.Left:
                 SetCaret(
-                    TextNavigation.PreviousGrapheme(Document, selection.Focus),
+                    command
+                        ? TextNavigation.PreviousWord(Document, selection.Focus)
+                        : TextNavigation.PreviousGrapheme(Document, selection.Focus),
                     extend);
                 return true;
             case Key.Right:
                 SetCaret(
-                    TextNavigation.NextGrapheme(Document, selection.Focus),
+                    command
+                        ? TextNavigation.NextWord(Document, selection.Focus)
+                        : TextNavigation.NextGrapheme(Document, selection.Focus),
                     extend);
                 return true;
             case Key.Up:
@@ -398,11 +472,23 @@ public sealed class DocumentPreviewControl : Control
             case Key.Down:
                 MoveLine(1, extend);
                 return true;
+            case Key.Home when command:
+                SetCaret(Selection.StartOf(Document).Focus, extend);
+                return true;
             case Key.Home:
                 MoveToLineBoundary(start: true, extend);
                 return true;
+            case Key.End when command:
+                SetCaret(Selection.EndOf(Document).Focus, extend);
+                return true;
             case Key.End:
                 MoveToLineBoundary(start: false, extend);
+                return true;
+            case Key.PageUp:
+                MoveViewport(-1, extend);
+                return true;
+            case Key.PageDown:
+                MoveViewport(1, extend);
                 return true;
             case Key.Back when command:
                 if (IsEditable)
@@ -595,6 +681,37 @@ public sealed class DocumentPreviewControl : Control
                 paragraph,
                 hit.Value.ParagraphOffset,
                 focus.Affinity),
+            extend);
+    }
+
+    private void MoveViewport(int direction, bool extend)
+    {
+        if (Document is null || Layout is null)
+        {
+            return;
+        }
+
+        var caret = GetCaretContentRect();
+
+        if (caret is null)
+        {
+            return;
+        }
+
+        var viewportHeight = _scrollViewer?.Viewport.Height ?? 800;
+        var target = new Point(
+            caret.Value.X,
+            caret.Value.Y + (direction * viewportHeight * 0.9));
+
+        if (SetCaretFromContentPoint(target, extend))
+        {
+            return;
+        }
+
+        SetCaret(
+            direction < 0
+                ? Selection.StartOf(Document).Focus
+                : Selection.EndOf(Document).Focus,
             extend);
     }
 
