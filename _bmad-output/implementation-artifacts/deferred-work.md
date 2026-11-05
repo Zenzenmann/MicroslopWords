@@ -7,7 +7,6 @@ Questions and decisions intentionally deferred from planning. Resolve the item a
 | ID | Question | Impact | Owner | Trigger |
 |---|---|---|---|---|
 | DEF-001 | Which fonts may be bundled, and what is the fallback/substitution policy when a DOCX requests an unavailable font? (STORY-004 shipped an interim catalog-plus-fallback policy in ADR 0004 with **no bundled fonts**; the human licensing/bundling decision is still required.) | Deterministic shaping, PDF embedding, licensing, package size | Product + legal review | Before any font is bundled and before `STORY-015` PDF embedding |
-| DEF-002 | Is the supported zoom range `25–400%` (SPEC) or `50–400%` (UX)? | Canvas behavior, tests, accessibility | Product + UX | Before `STORY-005` completes |
 | DEF-003 | Which header/footer variants ship in v1: first-page only, or also odd/even? | DOCX round-trip, pagination, UI | Product + architecture | During `STORY-014` |
 | DEF-004 | What is the minimum table size and the exact merge/split formatting behavior? | Table editing, DOCX fidelity, tests | Product + UX | During `STORY-012` |
 | DEF-006 | Is one document per window final for v1? | Shell layout, session restore, file locking | Product + UX | Before `STORY-001` review |
@@ -21,6 +20,7 @@ Questions and decisions intentionally deferred from planning. Resolve the item a
 ## Resolved Decisions
 
 - `DEF-005` (resolved during `STORY-003`): v1 keeps at most 20 recovery snapshots, one per document identity; a newer snapshot supersedes the prior snapshot for the same document, and a successful save removes that document's snapshot. Startup offers each snapshot with Open recovered draft, Discard (confirmed), or Later. Recovered drafts open unsaved with no source path, and recovery is disabled with a diagnostic for documents containing unsupported content.
+- `DEF-002` (resolved during `STORY-005`): the supported canvas zoom range is `25–400%`, following `SPEC.md` and superseding the UX `50–400%` assumption. The page canvas clamps all zoom inputs to that range.
 
 ## Planning Notes
 

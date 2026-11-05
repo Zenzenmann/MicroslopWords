@@ -57,6 +57,7 @@ public static class DocxService
             }
 
             var blocks = ImmutableArray.CreateBuilder<Block>();
+            SectionProperties? sectionProperties = null;
 
             foreach (var element in body.ChildElements)
             {
@@ -72,7 +73,8 @@ public static class DocxService
                             DocxDiagnosticCodes.UnsupportedTable,
                             "Tables are not shown in this preview.");
                         break;
-                    case SectionProperties:
+                    case SectionProperties properties:
+                        sectionProperties = properties;
                         break;
                     default:
                         Report(
@@ -90,7 +92,7 @@ public static class DocxService
             var section = new Section(
                 Guid.NewGuid(),
                 blocks.ToImmutable(),
-                PageSettings.Letter);
+                ToPageSettings(sectionProperties));
             var document = new CoreDocument(
                 Guid.NewGuid(),
                 title ?? "Imported document",
@@ -144,8 +146,52 @@ public static class DocxService
             body.Append(new WpParagraph());
         }
 
+        body.Append(ToSectionProperties(
+            document.Sections.FirstOrDefault()?.EffectivePage ?? PageSettings.Letter));
+
         mainPart.Document.Save();
     }
+
+    private static PageSettings ToPageSettings(SectionProperties? properties)
+    {
+        var size = properties?.GetFirstChild<PageSize>();
+        var margin = properties?.GetFirstChild<PageMargin>();
+
+        var widthValue = size?.Width?.Value;
+        var heightValue = size?.Height?.Value;
+        var width = widthValue is > 0 ? widthValue.Value / 20.0 : PageSettings.Letter.WidthPoints;
+        var height = heightValue is > 0 ? heightValue.Value / 20.0 : PageSettings.Letter.HeightPoints;
+        var isLandscape = size?.Orient?.Value == PageOrientationValues.Landscape;
+
+        return new PageSettings
+        {
+            WidthPoints = isLandscape ? Math.Min(width, height) : width,
+            HeightPoints = isLandscape ? Math.Max(width, height) : height,
+            Orientation = isLandscape ? PageOrientation.Landscape : PageOrientation.Portrait,
+            MarginLeftPoints = (margin?.Left?.Value ?? 1440) / 20.0,
+            MarginTopPoints = (margin?.Top?.Value ?? 1440) / 20.0,
+            MarginRightPoints = (margin?.Right?.Value ?? 1440) / 20.0,
+            MarginBottomPoints = (margin?.Bottom?.Value ?? 1440) / 20.0,
+        };
+    }
+
+    private static SectionProperties ToSectionProperties(PageSettings page) =>
+        new(
+            new PageSize
+            {
+                Width = (uint)Math.Round(page.EffectiveWidthPoints * 20),
+                Height = (uint)Math.Round(page.EffectiveHeightPoints * 20),
+                Orient = page.Orientation == PageOrientation.Landscape
+                    ? PageOrientationValues.Landscape
+                    : PageOrientationValues.Portrait,
+            },
+            new PageMargin
+            {
+                Left = (uint)Math.Round(page.MarginLeftPoints * 20),
+                Top = (int)Math.Round(page.MarginTopPoints * 20),
+                Right = (uint)Math.Round(page.MarginRightPoints * 20),
+                Bottom = (int)Math.Round(page.MarginBottomPoints * 20),
+            });
 
     private static ParagraphBlock ToParagraphBlock(
         WpParagraph paragraph,

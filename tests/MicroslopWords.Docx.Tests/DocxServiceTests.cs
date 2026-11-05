@@ -39,6 +39,43 @@ public sealed class DocxServiceTests
     }
 
     [Fact]
+    public void SaveAndLoad_round_trips_page_settings()
+    {
+        var page = PageSettings.A4 with
+        {
+            Orientation = PageOrientation.Landscape,
+            MarginLeftPoints = 36,
+            MarginTopPoints = 48,
+            MarginRightPoints = 54,
+            MarginBottomPoints = 60,
+        };
+        var paragraph = ParagraphBlock.Create("Page settings");
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(paragraph),
+            page);
+        var document = new Document(Guid.NewGuid(), "Page", ImmutableArray.Create(section));
+
+        using var stream = new MemoryStream();
+        DocxService.Save(document, stream);
+        stream.Position = 0;
+
+        var loaded = DocxService.Load(stream, "Page", TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue();
+
+        var loadedPage = loaded.Value!.Sections.Single().EffectivePage;
+
+        loadedPage.Orientation.ShouldBe(PageOrientation.Landscape);
+        loadedPage.EffectiveWidthPoints.ShouldBe(841.89, 0.1);
+        loadedPage.EffectiveHeightPoints.ShouldBe(595.28, 0.1);
+        loadedPage.MarginLeftPoints.ShouldBe(36);
+        loadedPage.MarginTopPoints.ShouldBe(48);
+        loadedPage.MarginRightPoints.ShouldBe(54);
+        loadedPage.MarginBottomPoints.ShouldBe(60);
+    }
+
+    [Fact]
     public void Load_imports_unicode_text()
     {
         var paragraph = new ParagraphBlock(

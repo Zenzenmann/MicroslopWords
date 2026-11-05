@@ -16,6 +16,17 @@
         <vm:MainViewModel />
     </Design.DataContext>
 
+    <Window.KeyBindings>
+        <KeyBinding Gesture="Ctrl+OemPlus" Command="{Binding ZoomInCommand}" />
+        <KeyBinding Gesture="Ctrl+OemMinus" Command="{Binding ZoomOutCommand}" />
+        <KeyBinding Gesture="Ctrl+D0" Command="{Binding ResetZoomCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+D0" Command="{Binding FitWidthCommand}" />
+        <KeyBinding Gesture="Meta+OemPlus" Command="{Binding ZoomInCommand}" />
+        <KeyBinding Gesture="Meta+OemMinus" Command="{Binding ZoomOutCommand}" />
+        <KeyBinding Gesture="Meta+D0" Command="{Binding ResetZoomCommand}" />
+        <KeyBinding Gesture="Meta+Shift+D0" Command="{Binding FitWidthCommand}" />
+    </Window.KeyBindings>
+
     <DockPanel>
         <Menu DockPanel.Dock="Top">
             <MenuItem Header="_File">
@@ -41,6 +52,14 @@
                 <MenuItem Header="_Bold" Command="{Binding ToggleBoldCommand}" />
                 <MenuItem Header="_Italic" Command="{Binding ToggleItalicCommand}" />
                 <MenuItem Header="_Underline" Command="{Binding ToggleUnderlineCommand}" />
+            </MenuItem>
+            <MenuItem Header="_View">
+                <MenuItem Header="Zoom _In" Command="{Binding ZoomInCommand}" />
+                <MenuItem Header="Zoom _Out" Command="{Binding ZoomOutCommand}" />
+                <MenuItem Header="_100%" Command="{Binding ResetZoomCommand}" />
+                <Separator />
+                <MenuItem Header="Fit _Width" Command="{Binding FitWidthCommand}" />
+                <MenuItem Header="Fit _Page" Command="{Binding FitPageCommand}" />
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About MicroslopWords" />
@@ -121,18 +140,27 @@
         <Border DockPanel.Dock="Bottom" Background="#F5F5F5" BorderBrush="#D8D8D8" BorderThickness="0,1,0,0" Padding="10,5">
             <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding StatusText}" FontSize="12" />
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="12">
-                    <TextBlock Text="{Binding SaveStateText}" FontSize="12" Foreground="#666666" />
-                    <TextBlock Text="{Binding DocumentTitle}" FontSize="12" Foreground="#666666" />
-                    <TextBlock Text="{Binding PageLabel}" FontSize="12" Foreground="#666666" />
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                    <TextBlock Text="{Binding SaveStateText}" FontSize="12" Foreground="#666666" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding DocumentTitle}" FontSize="12" Foreground="#666666" VerticalAlignment="Center" />
+                    <TextBlock Text="{Binding PageLabel}" FontSize="12" Foreground="#666666" VerticalAlignment="Center" />
+                    <Rectangle Width="1" Height="16" Fill="#D8D8D8" />
+                    <Button Content="-" Command="{Binding ZoomOutCommand}" Width="24" Height="24" Padding="0" />
+                    <TextBlock Text="{Binding ZoomPercentText}" FontSize="12" Foreground="#666666" MinWidth="42" TextAlignment="Center" VerticalAlignment="Center" />
+                    <Button Content="+" Command="{Binding ZoomInCommand}" Width="24" Height="24" Padding="0" />
+                    <Button Content="Fit" Command="{Binding FitWidthCommand}" Height="24" Padding="8,0" />
                 </StackPanel>
             </Grid>
         </Border>
 
-        <ScrollViewer HorizontalScrollBarVisibility="Auto"
+        <ScrollViewer x:Name="PageScroll"
+                      HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
                       Background="#E8E8E8">
-            <controls:DocumentPreviewControl Layout="{Binding Layout}"
+            <controls:DocumentPreviewControl x:Name="PageCanvas"
+                                             Layout="{Binding Layout}"
+                                             Zoom="{Binding Zoom, Mode=TwoWay}"
+                                             CurrentPage="{Binding CurrentPage, Mode=OneWayToSource}"
                                              HorizontalAlignment="Center"
                                              VerticalAlignment="Top" />
         </ScrollViewer>
