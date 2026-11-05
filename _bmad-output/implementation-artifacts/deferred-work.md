@@ -30,6 +30,7 @@ Questions and decisions intentionally deferred from planning. Resolve the item a
 - Manual IME smoke on Windows, macOS, and Linux remains for release validation; `STORY-006` covers the simulated IME client and headless composition flow.
 - `STORY-007` clipboard supports plain text, sanitized HTML, and an in-memory internal fragment. RTF is intentionally not implemented because HTML satisfies the optional requirement. HTML list markup pastes as prefixed paragraphs until `STORY-009` adds structured lists.
 - `STORY-008` writes run highlight as `w:shd` fill and imports both `w:highlight` and `w:shd`; style-based inheritance remains default-only until `STORY-010`.
+- `STORY-009` models lists with a list identity, kind, and level; layout computes bullet/decimal labels, and DOCX numbering definitions are regenerated on save. Page breaks are stored as `\f` in run text so they remain selectable/deletable and map to `w:br w:type="page"`.
 - Human checkpoints are required after `STORY-016` and `STORY-020`, and SPEC checkpoints are required at `STORY-004`, `STORY-006`, `STORY-016`, `STORY-018`, and `STORY-020`.
 
 ## Build-Loop Failures

@@ -286,11 +286,76 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     [ObservableProperty]
     public partial string HighlightInput { get; set; } = string.Empty;
 
+    [ObservableProperty]
+    public partial ParagraphAlignment? SelectedAlignment { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedSpaceBefore { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedSpaceAfter { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedLineSpacing { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedLeftIndent { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedRightIndent { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedFirstLineIndent { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedHangingIndent { get; set; }
+
+    [ObservableProperty]
+    public partial bool? IsBulletedList { get; set; }
+
+    [ObservableProperty]
+    public partial bool? IsNumberedList { get; set; }
+
+    [ObservableProperty]
+    public partial int? SelectedListLevel { get; set; }
+
+    [ObservableProperty]
+    public partial string SpaceBeforeInput { get; set; } = "0";
+
+    [ObservableProperty]
+    public partial string SpaceAfterInput { get; set; } = "8";
+
+    [ObservableProperty]
+    public partial string LineSpacingInput { get; set; } = "1.15";
+
+    [ObservableProperty]
+    public partial string LeftIndentInput { get; set; } = "0";
+
+    [ObservableProperty]
+    public partial string RightIndentInput { get; set; } = "0";
+
+    [ObservableProperty]
+    public partial string FirstLineIndentInput { get; set; } = "0";
+
+    [ObservableProperty]
+    public partial string HangingIndentInput { get; set; } = "0";
     public bool IsFontFamilyMixed => SelectedFontFamily is null;
 
     public bool IsFontSizeMixed => SelectedFontSize is null;
 
     public bool IsColorMixed => SelectedColorHex is null;
+
+    public bool IsAlignmentMixed => SelectedAlignment is null;
+
+    public bool AreParagraphValuesMixed =>
+        SelectedAlignment is null
+        || SelectedSpaceBefore is null
+        || SelectedSpaceAfter is null
+        || SelectedLineSpacing is null
+        || SelectedLeftIndent is null
+        || SelectedRightIndent is null
+        || SelectedFirstLineIndent is null
+        || SelectedHangingIndent is null;
 
     public double ViewportWidth { get; private set; }
 
@@ -544,6 +609,216 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     public void SetHighlight(string? highlightHex) =>
         ApplyCharacterProperties(run => run with { HighlightHex = highlightHex });
 
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void AlignLeft() =>
+        ApplyParagraphProperties(properties => properties with
+        {
+            Alignment = ParagraphAlignment.Left,
+        });
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void AlignCenter() =>
+        ApplyParagraphProperties(properties => properties with
+        {
+            Alignment = ParagraphAlignment.Center,
+        });
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void AlignRight() =>
+        ApplyParagraphProperties(properties => properties with
+        {
+            Alignment = ParagraphAlignment.Right,
+        });
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void AlignJustify() =>
+        ApplyParagraphProperties(properties => properties with
+        {
+            Alignment = ParagraphAlignment.Justify,
+        });
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ToggleBulletedList()
+    {
+        ExecuteEdit(new ToggleListCommand(_history.Selection, ListKind.Bulleted));
+        RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ToggleNumberedList()
+    {
+        ExecuteEdit(new ToggleListCommand(_history.Selection, ListKind.Numbered));
+        RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void IncreaseListLevel() =>
+        SetListLevel(Math.Min(9, (SelectedListLevel ?? 1) + 1));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void DecreaseListLevel() =>
+        SetListLevel(Math.Max(1, (SelectedListLevel ?? 1) - 1));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void RestartNumbering()
+    {
+        ExecuteEdit(new RestartNumberingCommand(_history.Selection));
+        RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void InsertPageBreak()
+    {
+        ExecuteEdit(new InsertPageBreakCommand(_history.Selection));
+        RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ClearParagraphFormatting()
+    {
+        ExecuteEdit(new ApplyParagraphPropertiesCommand(
+            _history.Selection,
+            properties => properties.ListKind != ListKind.None
+                || properties.StyleId is not null
+                    ? new ParagraphProperties
+                    {
+                        ListKind = properties.ListKind,
+                        ListLevel = properties.ListLevel,
+                        ListId = properties.ListId,
+                        StyleId = properties.StyleId,
+                    }
+                    : null));
+        RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplySpaceBefore()
+    {
+        if (!TryParsePointValue(SpaceBeforeInput, out var value, allowNegative: false))
+        {
+            ErrorMessage = "Space before must be zero or greater.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            SpaceBeforePoints = value,
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplySpaceAfter()
+    {
+        if (!TryParsePointValue(SpaceAfterInput, out var value, allowNegative: false))
+        {
+            ErrorMessage = "Space after must be zero or greater.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            SpaceAfterPoints = value,
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyLineSpacing()
+    {
+        if (!double.TryParse(
+                LineSpacingInput,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out var value)
+            || value is < 0.5 or > 3.0)
+        {
+            ErrorMessage = "Line spacing must be between 0.5 and 3.0.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            LineSpacing = value,
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyLeftIndent()
+    {
+        if (!TryParsePointValue(LeftIndentInput, out var value, allowNegative: false))
+        {
+            ErrorMessage = "Left indent must be zero or greater.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            LeftIndentPoints = value,
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyRightIndent()
+    {
+        if (!TryParsePointValue(RightIndentInput, out var value, allowNegative: false))
+        {
+            ErrorMessage = "Right indent must be zero or greater.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            RightIndentPoints = value,
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyFirstLineIndent()
+    {
+        if (!TryParsePointValue(FirstLineIndentInput, out var value, allowNegative: false))
+        {
+            ErrorMessage = "First-line indent must be zero or greater.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            FirstLineIndentPoints = value,
+        });
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyHangingIndent()
+    {
+        if (!TryParsePointValue(HangingIndentInput, out var value, allowNegative: false))
+        {
+            ErrorMessage = "Hanging indent must be zero or greater.";
+            return;
+        }
+
+        ApplyParagraphProperties(properties => properties with
+        {
+            FirstLineIndentPoints = -value,
+        });
+    }
+
+    private void SetListLevel(int level)
+    {
+        ExecuteEdit(new SetListLevelCommand(_history.Selection, level));
+        RefreshParagraphFormattingState();
+    }
+
+    private void ApplyParagraphProperties(
+        Func<ParagraphProperties, ParagraphProperties> transform)
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        ErrorMessage = string.Empty;
+        ExecuteEdit(new ApplyParagraphPropertiesCommand(_history.Selection, transform));
+        RefreshParagraphFormattingState();
+    }
     public bool CanUndo => _history.CanUndo;
 
     public bool CanRedo => _history.CanRedo;
@@ -837,6 +1112,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         SyncSelectionFromHistory();
         NotifyHistoryCommands();
         RefreshCharacterFormattingState();
+        RefreshParagraphFormattingState();
     }
 
     private void SyncSelectionFromHistory()
@@ -939,6 +1215,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
         NotifyClipboardCommands();
         RefreshCharacterFormattingState();
+        RefreshParagraphFormattingState();
     }
 
     partial void OnIsReadOnlyChanged(bool value) => NotifyEditingEnabledChanged();
@@ -974,6 +1251,24 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         ApplyFontSizeCommand.NotifyCanExecuteChanged();
         ApplyColorCommand.NotifyCanExecuteChanged();
         ApplyHighlightCommand.NotifyCanExecuteChanged();
+        AlignLeftCommand.NotifyCanExecuteChanged();
+        AlignCenterCommand.NotifyCanExecuteChanged();
+        AlignRightCommand.NotifyCanExecuteChanged();
+        AlignJustifyCommand.NotifyCanExecuteChanged();
+        ToggleBulletedListCommand.NotifyCanExecuteChanged();
+        ToggleNumberedListCommand.NotifyCanExecuteChanged();
+        IncreaseListLevelCommand.NotifyCanExecuteChanged();
+        DecreaseListLevelCommand.NotifyCanExecuteChanged();
+        RestartNumberingCommand.NotifyCanExecuteChanged();
+        InsertPageBreakCommand.NotifyCanExecuteChanged();
+        ClearParagraphFormattingCommand.NotifyCanExecuteChanged();
+        ApplySpaceBeforeCommand.NotifyCanExecuteChanged();
+        ApplySpaceAfterCommand.NotifyCanExecuteChanged();
+        ApplyLineSpacingCommand.NotifyCanExecuteChanged();
+        ApplyLeftIndentCommand.NotifyCanExecuteChanged();
+        ApplyRightIndentCommand.NotifyCanExecuteChanged();
+        ApplyFirstLineIndentCommand.NotifyCanExecuteChanged();
+        ApplyHangingIndentCommand.NotifyCanExecuteChanged();
         FindCommand.NotifyCanExecuteChanged();
         NotifyClipboardCommands();
     }
@@ -1265,6 +1560,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         _recoveryUnavailableNoticeShown = false;
         NotifyHistoryCommands();
         RefreshCharacterFormattingState();
+        RefreshParagraphFormattingState();
         UpdateWindowTitle();
     }
 
@@ -1642,6 +1938,164 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         return false;
     }
 
+    private void RefreshParagraphFormattingState()
+    {
+        var paragraphs = GetSelectedParagraphs();
+        var properties = paragraphs
+            .Select(paragraph => paragraph.EffectiveProperties)
+            .ToList();
+
+        if (properties.Count == 0)
+        {
+            properties.Add(ParagraphProperties.Default);
+        }
+
+        SelectedAlignment = CommonValue(properties.Select(item => item.Alignment));
+        SelectedSpaceBefore = CommonValue(properties.Select(item => item.SpaceBeforePoints));
+        SelectedSpaceAfter = CommonValue(properties.Select(item => item.SpaceAfterPoints));
+        SelectedLineSpacing = CommonValue(properties.Select(item => item.LineSpacing));
+        SelectedLeftIndent = CommonValue(properties.Select(item => item.LeftIndentPoints));
+        SelectedRightIndent = CommonValue(properties.Select(item => item.RightIndentPoints));
+
+        var firstLineIndents = properties
+            .Select(item => item.FirstLineIndentPoints)
+            .Distinct()
+            .ToArray();
+
+        if (firstLineIndents.Length == 1)
+        {
+            var firstLine = firstLineIndents[0];
+            SelectedFirstLineIndent = Math.Max(0, firstLine);
+            SelectedHangingIndent = Math.Max(0, -firstLine);
+        }
+        else
+        {
+            SelectedFirstLineIndent = null;
+            SelectedHangingIndent = null;
+        }
+
+        var kinds = properties.Select(item => item.ListKind).ToArray();
+        IsBulletedList = kinds.All(kind => kind == ListKind.Bulleted)
+            ? true
+            : kinds.All(kind => kind != ListKind.Bulleted)
+                ? false
+                : null;
+        IsNumberedList = kinds.All(kind => kind == ListKind.Numbered)
+            ? true
+            : kinds.All(kind => kind != ListKind.Numbered)
+                ? false
+                : null;
+
+        var levels = properties
+            .Where(item => item.ListKind != ListKind.None)
+            .Select(item => item.ListLevel)
+            .Distinct()
+            .ToArray();
+        SelectedListLevel = levels.Length == 1 ? levels[0] : null;
+
+        if (SelectedSpaceBefore is { } spaceBefore)
+        {
+            SpaceBeforeInput = spaceBefore.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedSpaceAfter is { } spaceAfter)
+        {
+            SpaceAfterInput = spaceAfter.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedLineSpacing is { } lineSpacing)
+        {
+            LineSpacingInput = lineSpacing.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedLeftIndent is { } left)
+        {
+            LeftIndentInput = left.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedRightIndent is { } right)
+        {
+            RightIndentInput = right.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedFirstLineIndent is { } first)
+        {
+            FirstLineIndentInput = first.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedHangingIndent is { } hanging)
+        {
+            HangingIndentInput = hanging.ToString(CultureInfo.InvariantCulture);
+        }
+
+        OnPropertyChanged(nameof(IsAlignmentMixed));
+        OnPropertyChanged(nameof(AreParagraphValuesMixed));
+    }
+
+    private List<ParagraphBlock> GetSelectedParagraphs()
+    {
+        if (Document is null)
+        {
+            return [];
+        }
+
+        var selection = SelectionMap.Normalize(_history.Selection, Document);
+        var paragraphs = Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToList();
+
+        if (selection.IsCollapsed)
+        {
+            var current = Document.FindParagraph(selection.Focus.ParagraphId);
+            return current is null ? [] : [current];
+        }
+
+        var start = selection.GetStart(Document);
+        var end = selection.GetEnd(Document);
+        var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
+        var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
+
+        if (startIndex < 0 || endIndex < 0)
+        {
+            return [];
+        }
+
+        if (startIndex > endIndex)
+        {
+            (startIndex, endIndex) = (endIndex, startIndex);
+        }
+
+        return paragraphs
+            .Skip(startIndex)
+            .Take(endIndex - startIndex + 1)
+            .ToList();
+    }
+
+    private static T? CommonValue<T>(IEnumerable<T> values)
+        where T : struct
+    {
+        var distinct = values.Distinct().Take(2).ToArray();
+
+        return distinct.Length == 1 ? distinct[0] : null;
+    }
+
+    private static bool TryParsePointValue(
+        string input,
+        out double value,
+        bool allowNegative)
+    {
+        if (!double.TryParse(
+                input,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out value))
+        {
+            return false;
+        }
+
+        return allowNegative || value >= 0;
+    }
     private void ClearMessages()
     {
         ErrorMessage = string.Empty;

@@ -676,6 +676,187 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public void Clearing_paragraph_formatting_keeps_list_membership()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Item");
+        viewModel.SelectAllCommand.Execute(null);
+        viewModel.ToggleBulletedListCommand.Execute(null);
+        viewModel.SpaceBeforeInput = "12";
+        viewModel.ApplySpaceBeforeCommand.Execute(null);
+
+        viewModel.ClearParagraphFormattingCommand.Execute(null);
+
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single();
+
+        paragraph.EffectiveProperties.SpaceBeforePoints.ShouldBe(0);
+        paragraph.EffectiveProperties.ListKind.ShouldBe(ListKind.Bulleted);
+    }
+
+    [Fact]
+    public void Deleting_a_page_break_restores_the_previous_page_count()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("BeforeAfter");
+        SelectRange(viewModel, 6, 6);
+        viewModel.InsertPageBreakCommand.Execute(null);
+        viewModel.PageCount.ShouldBe(2);
+        SelectRange(viewModel, 6, 6);
+
+        viewModel.DeleteForward();
+
+        viewModel.Document.PlainText.ShouldBe("BeforeAfter");
+        viewModel.PageCount.ShouldBe(1);
+    }
+    [Fact]
+    public void Paragraph_alignment_applies_to_selected_paragraphs_and_reports_mixed()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("First");
+        viewModel.SplitParagraph();
+        viewModel.InsertText("Second");
+        SelectParagraph(viewModel, 0);
+        viewModel.AlignCenterCommand.Execute(null);
+        SelectParagraph(viewModel, 1);
+        viewModel.AlignRightCommand.Execute(null);
+        viewModel.SelectAllCommand.Execute(null);
+
+        viewModel.IsAlignmentMixed.ShouldBeTrue();
+
+        var paragraphs = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToArray();
+
+        paragraphs[0].EffectiveProperties.Alignment.ShouldBe(ParagraphAlignment.Center);
+        paragraphs[1].EffectiveProperties.Alignment.ShouldBe(ParagraphAlignment.Right);
+    }
+
+    [Fact]
+    public void Paragraph_spacing_and_indents_apply_and_reject_invalid_values()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Text");
+        SelectRange(viewModel, 0, 4);
+
+        viewModel.SpaceBeforeInput = "12";
+        viewModel.ApplySpaceBeforeCommand.Execute(null);
+        viewModel.SpaceAfterInput = "4";
+        viewModel.ApplySpaceAfterCommand.Execute(null);
+        viewModel.LineSpacingInput = "1.5";
+        viewModel.ApplyLineSpacingCommand.Execute(null);
+        viewModel.LeftIndentInput = "18";
+        viewModel.ApplyLeftIndentCommand.Execute(null);
+        viewModel.FirstLineIndentInput = "6";
+        viewModel.ApplyFirstLineIndentCommand.Execute(null);
+
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single();
+
+        paragraph.EffectiveProperties.SpaceBeforePoints.ShouldBe(12);
+        paragraph.EffectiveProperties.SpaceAfterPoints.ShouldBe(4);
+        paragraph.EffectiveProperties.LineSpacing.ShouldBe(1.5);
+        paragraph.EffectiveProperties.LeftIndentPoints.ShouldBe(18);
+        paragraph.EffectiveProperties.FirstLineIndentPoints.ShouldBe(6);
+
+        var document = viewModel.Document;
+
+        viewModel.LineSpacingInput = "4";
+        viewModel.ApplyLineSpacingCommand.Execute(null);
+        viewModel.ErrorMessage.ShouldContain("0.5 and 3.0");
+        viewModel.Document.ShouldBeSameAs(document);
+
+        viewModel.LeftIndentInput = "-1";
+        viewModel.ApplyLeftIndentCommand.Execute(null);
+        viewModel.ErrorMessage.ShouldContain("zero or greater");
+        viewModel.Document.ShouldBeSameAs(document);
+    }
+
+    [Fact]
+    public void Bulleted_list_toggle_applies_levels_and_removes_the_list()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("One");
+        viewModel.SplitParagraph();
+        viewModel.InsertText("Two");
+        viewModel.SelectAllCommand.Execute(null);
+
+        viewModel.ToggleBulletedListCommand.Execute(null);
+
+        viewModel.IsBulletedList.ShouldBe(true);
+        var paragraphs = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToArray();
+        paragraphs.ShouldAllBe(paragraph =>
+            paragraph.EffectiveProperties.ListKind == ListKind.Bulleted);
+
+        viewModel.IncreaseListLevelCommand.Execute(null);
+
+        paragraphs = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToArray();
+        paragraphs.ShouldAllBe(paragraph =>
+            paragraph.EffectiveProperties.ListLevel == 2);
+
+        viewModel.ToggleBulletedListCommand.Execute(null);
+
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ShouldAllBe(paragraph =>
+                paragraph.EffectiveProperties.ListKind == ListKind.None);
+    }
+
+    [Fact]
+    public void Restart_numbering_restarts_the_visible_sequence()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("One");
+        viewModel.SplitParagraph();
+        viewModel.InsertText("Two");
+        viewModel.SplitParagraph();
+        viewModel.InsertText("Three");
+        viewModel.SelectAllCommand.Execute(null);
+        viewModel.ToggleNumberedListCommand.Execute(null);
+        viewModel.Layout!.Pages[0].Paragraphs
+            .Select(paragraph => paragraph.ListLabel)
+            .ShouldBe(["1.", "2.", "3."]);
+
+        SelectCaret(viewModel, 1, 0);
+        viewModel.RestartNumberingCommand.Execute(null);
+
+        viewModel.Layout!.Pages[0].Paragraphs
+            .Select(paragraph => paragraph.ListLabel)
+            .ShouldBe(["1.", "1.", "2."]);
+    }
+
+    [Fact]
+    public void Page_break_moves_following_content_to_the_next_page_and_undoes()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("BeforeAfter");
+        SelectRange(viewModel, 6, 6);
+        viewModel.PageCount.ShouldBe(1);
+
+        viewModel.InsertPageBreakCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("Before\fAfter");
+        viewModel.PageCount.ShouldBe(2);
+        viewModel.Layout!.PageBreaks.Length.ShouldBe(1);
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("BeforeAfter");
+        viewModel.PageCount.ShouldBe(1);
+    }
+    [Fact]
     public void Bold_toggle_applies_to_the_selection_and_is_undoable()
     {
         var viewModel = CreateViewModel();
@@ -1061,6 +1242,28 @@ public sealed class MainViewModelTests
         viewModel.UndoCommand.Execute(null);
 
         viewModel.Document.PlainText.ShouldBeEmpty();
+    }
+    private static void SelectParagraph(MainViewModel viewModel, int index)
+    {
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ElementAt(index);
+
+        viewModel.Selection = new Selection(
+            TextNavigation.StartOf(paragraph),
+            TextNavigation.EndOf(paragraph));
+    }
+
+    private static void SelectCaret(MainViewModel viewModel, int paragraphIndex, int offset)
+    {
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ElementAt(paragraphIndex);
+
+        viewModel.Selection = Selection.Caret(
+            TextNavigation.FromParagraphTextOffset(paragraph, offset));
     }
     private static void SelectRange(MainViewModel viewModel, int start, int end)
     {

@@ -76,6 +76,118 @@ public sealed class DocxServiceTests
     }
 
     [Fact]
+    public void SaveAndLoad_round_trips_paragraph_formatting()
+    {
+        var paragraph = new ParagraphBlock(
+            Guid.NewGuid(),
+            ImmutableArray.Create(Run.Create("Indented")),
+            new ParagraphProperties
+            {
+                Alignment = ParagraphAlignment.Center,
+                SpaceBeforePoints = 12,
+                SpaceAfterPoints = 4,
+                LineSpacing = 1.5,
+                LeftIndentPoints = 18,
+                RightIndentPoints = 9,
+                FirstLineIndentPoints = 6,
+            });
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(paragraph));
+        var document = new Document(Guid.NewGuid(), "Paragraph", ImmutableArray.Create(section));
+
+        using var stream = new MemoryStream();
+        DocxService.Save(document, stream);
+        stream.Position = 0;
+
+        var loaded = DocxService.Load(stream, "Paragraph", TestContext.Current.CancellationToken);
+        var properties = loaded.Value!.Sections.Single()
+            .Blocks.OfType<ParagraphBlock>()
+            .Single()
+            .EffectiveProperties;
+
+        properties.Alignment.ShouldBe(ParagraphAlignment.Center);
+        properties.SpaceBeforePoints.ShouldBe(12);
+        properties.SpaceAfterPoints.ShouldBe(4);
+        properties.LineSpacing.ShouldBe(1.5);
+        properties.LeftIndentPoints.ShouldBe(18);
+        properties.RightIndentPoints.ShouldBe(9);
+        properties.FirstLineIndentPoints.ShouldBe(6);
+    }
+
+    [Fact]
+    public void SaveAndLoad_round_trips_lists_as_structure()
+    {
+        var listId = Guid.NewGuid();
+        var first = new ParagraphBlock(
+            Guid.NewGuid(),
+            ImmutableArray.Create(Run.Create("One")),
+            new ParagraphProperties
+            {
+                ListKind = ListKind.Numbered,
+                ListLevel = 1,
+                ListId = listId,
+            });
+        var second = new ParagraphBlock(
+            Guid.NewGuid(),
+            ImmutableArray.Create(Run.Create("Nested")),
+            new ParagraphProperties
+            {
+                ListKind = ListKind.Bulleted,
+                ListLevel = 2,
+                ListId = listId,
+            });
+        var restarted = new ParagraphBlock(
+            Guid.NewGuid(),
+            ImmutableArray.Create(Run.Create("Restart")),
+            new ParagraphProperties
+            {
+                ListKind = ListKind.Numbered,
+                ListLevel = 1,
+                ListId = Guid.NewGuid(),
+            });
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(first, second, restarted));
+        var document = new Document(Guid.NewGuid(), "Lists", ImmutableArray.Create(section));
+
+        using var stream = new MemoryStream();
+        DocxService.Save(document, stream);
+        stream.Position = 0;
+
+        var loaded = DocxService.Load(stream, "Lists", TestContext.Current.CancellationToken);
+        var paragraphs = loaded.Value!.Sections.Single()
+            .Blocks.OfType<ParagraphBlock>()
+            .ToArray();
+
+        paragraphs[0].EffectiveProperties.ListKind.ShouldBe(ListKind.Numbered);
+        paragraphs[0].EffectiveProperties.ListLevel.ShouldBe(1);
+        paragraphs[1].EffectiveProperties.ListKind.ShouldBe(ListKind.Bulleted);
+        paragraphs[1].EffectiveProperties.ListLevel.ShouldBe(2);
+        paragraphs[0].EffectiveProperties.ListId.ShouldBe(
+            paragraphs[1].EffectiveProperties.ListId);
+        paragraphs[2].EffectiveProperties.ListId.ShouldNotBe(
+            paragraphs[0].EffectiveProperties.ListId);
+    }
+
+    [Fact]
+    public void SaveAndLoad_round_trips_page_breaks()
+    {
+        var paragraph = ParagraphBlock.Create("Before\fAfter");
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(paragraph));
+        var document = new Document(Guid.NewGuid(), "Breaks", ImmutableArray.Create(section));
+
+        using var stream = new MemoryStream();
+        DocxService.Save(document, stream);
+        stream.Position = 0;
+
+        var loaded = DocxService.Load(stream, "Breaks", TestContext.Current.CancellationToken);
+
+        loaded.Value!.PlainText.ShouldBe("Before\fAfter");
+    }
+    [Fact]
     public void SaveAndLoad_round_trips_character_formatting()
     {
         var properties = new RunProperties

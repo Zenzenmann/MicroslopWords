@@ -48,6 +48,8 @@
         <KeyBinding Gesture="Meta+I" Command="{Binding ToggleItalicCommand}" />
         <KeyBinding Gesture="Meta+U" Command="{Binding ToggleUnderlineCommand}" />
         <KeyBinding Gesture="Meta+Shift+X" Command="{Binding ToggleStrikethroughCommand}" />
+        <KeyBinding Gesture="Ctrl+Enter" Command="{Binding InsertPageBreakCommand}" />
+        <KeyBinding Gesture="Meta+Enter" Command="{Binding InsertPageBreakCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -82,7 +84,20 @@
                 <MenuItem Header="_Underline" Command="{Binding ToggleUnderlineCommand}" />
                 <MenuItem Header="_Strikethrough" Command="{Binding ToggleStrikethroughCommand}" />
                 <Separator />
-                <MenuItem Header="_Clear Character Formatting" Command="{Binding ClearCharacterFormattingCommand}" />
+                <MenuItem Header="Align _Left" Command="{Binding AlignLeftCommand}" />
+                <MenuItem Header="Align _Center" Command="{Binding AlignCenterCommand}" />
+                <MenuItem Header="Align _Right" Command="{Binding AlignRightCommand}" />
+                <MenuItem Header="Align _Justify" Command="{Binding AlignJustifyCommand}" />
+                <Separator />
+                <MenuItem Header="_Bulleted List" Command="{Binding ToggleBulletedListCommand}" />
+                <MenuItem Header="_Numbered List" Command="{Binding ToggleNumberedListCommand}" />
+                <MenuItem Header="Increase List _Level" Command="{Binding IncreaseListLevelCommand}" />
+                <MenuItem Header="Decrease List L_evel" Command="{Binding DecreaseListLevelCommand}" />
+                <MenuItem Header="_Restart Numbering" Command="{Binding RestartNumberingCommand}" />
+                <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
+                <Separator />
+                <MenuItem Header="Clear Character Formatting" Command="{Binding ClearCharacterFormattingCommand}" />
+                <MenuItem Header="Clear _Paragraph Formatting" Command="{Binding ClearParagraphFormattingCommand}" />
             </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="Zoom _In" Command="{Binding ZoomInCommand}" />
@@ -175,6 +190,53 @@
                 <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="6,0" />
                 <Button Content="Find" Command="{Binding FindCommand}" />
             </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Top" Background="#F9F9F9" BorderBrush="#D8D8D8" BorderThickness="0,0,0,1" Padding="10,6">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel Orientation="Horizontal" Spacing="4" IsEnabled="{Binding IsEditingEnabled}">
+                    <Button Content="Left" Command="{Binding AlignLeftCommand}" ToolTip.Tip="Align left" automation:AutomationProperties.Name="Align left" />
+                    <Button x:Name="AlignCenterButton" Content="Center" Command="{Binding AlignCenterCommand}" ToolTip.Tip="Align center" automation:AutomationProperties.Name="Align center" />
+                    <Button Content="Right" Command="{Binding AlignRightCommand}" ToolTip.Tip="Align right" automation:AutomationProperties.Name="Align right" />
+                    <Button Content="Justify" Command="{Binding AlignJustifyCommand}" ToolTip.Tip="Justify" automation:AutomationProperties.Name="Justify" />
+                    <TextBlock Text="Mixed" FontSize="11" Foreground="#666666" VerticalAlignment="Center" IsVisible="{Binding IsAlignmentMixed}" />
+                    <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
+                    <ToggleButton x:Name="BulletedListToggle"
+                                  Content="Bullets"
+                                  IsThreeState="True"
+                                  IsChecked="{Binding IsBulletedList, Mode=OneWay}"
+                                  Command="{Binding ToggleBulletedListCommand}"
+                                  automation:AutomationProperties.Name="Bulleted list" />
+                    <ToggleButton x:Name="NumberedListToggle"
+                                  Content="Numbering"
+                                  IsThreeState="True"
+                                  IsChecked="{Binding IsNumberedList, Mode=OneWay}"
+                                  Command="{Binding ToggleNumberedListCommand}"
+                                  automation:AutomationProperties.Name="Numbered list" />
+                    <Button Content="Level -" Command="{Binding DecreaseListLevelCommand}" ToolTip.Tip="Decrease list level" />
+                    <Button Content="Level +" Command="{Binding IncreaseListLevelCommand}" ToolTip.Tip="Increase list level" />
+                    <Button Content="Restart" Command="{Binding RestartNumberingCommand}" ToolTip.Tip="Restart numbering" />
+                    <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
+                    <TextBox Width="52" Text="{Binding SpaceBeforeInput, Mode=TwoWay}" automation:AutomationProperties.Name="Space before" />
+                    <Button Content="Set" Command="{Binding ApplySpaceBeforeCommand}" ToolTip.Tip="Apply space before" />
+                    <TextBox Width="52" Text="{Binding SpaceAfterInput, Mode=TwoWay}" automation:AutomationProperties.Name="Space after" />
+                    <Button Content="Set" Command="{Binding ApplySpaceAfterCommand}" ToolTip.Tip="Apply space after" />
+                    <TextBox Width="52" Text="{Binding LineSpacingInput, Mode=TwoWay}" automation:AutomationProperties.Name="Line spacing" />
+                    <Button Content="Set" Command="{Binding ApplyLineSpacingCommand}" ToolTip.Tip="Apply line spacing" />
+                    <TextBox Width="52" Text="{Binding LeftIndentInput, Mode=TwoWay}" automation:AutomationProperties.Name="Left indent" />
+                    <Button Content="Set" Command="{Binding ApplyLeftIndentCommand}" ToolTip.Tip="Apply left indent" />
+                    <TextBox Width="52" Text="{Binding RightIndentInput, Mode=TwoWay}" automation:AutomationProperties.Name="Right indent" />
+                    <Button Content="Set" Command="{Binding ApplyRightIndentCommand}" ToolTip.Tip="Apply right indent" />
+                    <TextBox Width="52" Text="{Binding FirstLineIndentInput, Mode=TwoWay}" automation:AutomationProperties.Name="First line indent" />
+                    <Button Content="Set" Command="{Binding ApplyFirstLineIndentCommand}" ToolTip.Tip="Apply first-line indent" />
+                    <TextBox Width="52" Text="{Binding HangingIndentInput, Mode=TwoWay}" automation:AutomationProperties.Name="Hanging indent" />
+                    <Button Content="Set" Command="{Binding ApplyHangingIndentCommand}" ToolTip.Tip="Apply hanging indent" />
+                    <TextBlock Text="Mixed" FontSize="11" Foreground="#666666" VerticalAlignment="Center" IsVisible="{Binding AreParagraphValuesMixed}" />
+                    <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
+                    <Button x:Name="PageBreakButton" Content="Page break" Command="{Binding InsertPageBreakCommand}" automation:AutomationProperties.Name="Insert page break" />
+                    <Button Content="Clear" Command="{Binding ClearParagraphFormattingCommand}" ToolTip.Tip="Clear paragraph formatting" />
+                </StackPanel>
+            </ScrollViewer>
         </Border>
 
         <Border DockPanel.Dock="Top"
