@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
@@ -134,8 +135,26 @@ public static class DocxService
 
             foreach (var run in paragraphBlock.Runs)
             {
-                paragraph.Append(new WpRun(
-                    new WpText(run.Text) { Space = SpaceProcessingModeValues.Preserve }));
+                var wpRun = new WpRun();
+                var segments = run.Text.Split('\n');
+
+                for (var index = 0; index < segments.Length; index++)
+                {
+                    if (segments[index].Length > 0 || segments.Length == 1)
+                    {
+                        wpRun.Append(new WpText(segments[index])
+                        {
+                            Space = SpaceProcessingModeValues.Preserve,
+                        });
+                    }
+
+                    if (index < segments.Length - 1)
+                    {
+                        wpRun.Append(new Break());
+                    }
+                }
+
+                paragraph.Append(wpRun);
             }
 
             body.Append(paragraph);
@@ -232,21 +251,50 @@ public static class DocxService
 
         foreach (var run in paragraph.Descendants<WpRun>())
         {
-            var text = string.Concat(run.Elements<WpText>().Select(runText => runText.Text));
+            var text = new StringBuilder();
 
-            if (run.Elements<WpText>().Any()
-                && run.ChildElements.Any(child =>
-                    child is not WpText
-                    && child is not DocumentFormat.OpenXml.Wordprocessing.RunProperties))
+            foreach (var child in run.ChildElements)
             {
-                report(
-                    DocxDiagnosticCodes.UnsupportedRunContent,
-                    "Some run content is not shown in this preview.");
+                switch (child)
+                {
+                    case WpText runText:
+                        text.Append(runText.Text);
+                        break;
+                    case Break lineBreak:
+                        if (lineBreak.Type is null
+                            || lineBreak.Type.Value == BreakValues.TextWrapping)
+                        {
+                            text.Append('\n');
+                        }
+                        else
+                        {
+                            report(
+                                DocxDiagnosticCodes.UnsupportedRunContent,
+                                "Page and column breaks are not shown in this preview.");
+                        }
+
+                        break;
+                    case CarriageReturn:
+                        text.Append('\n');
+                        break;
+                    case TabChar:
+                        text.Append('\t');
+                        break;
+                    case LastRenderedPageBreak:
+                        break;
+                    case DocumentFormat.OpenXml.Wordprocessing.RunProperties:
+                        break;
+                    default:
+                        report(
+                            DocxDiagnosticCodes.UnsupportedRunContent,
+                            "Some run content is not shown in this preview.");
+                        break;
+                }
             }
 
             if (text.Length > 0)
             {
-                runs.Add(new CoreRun(Guid.NewGuid(), text));
+                runs.Add(new CoreRun(Guid.NewGuid(), text.ToString()));
             }
         }
 

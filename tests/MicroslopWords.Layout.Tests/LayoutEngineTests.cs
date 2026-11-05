@@ -187,10 +187,10 @@ public sealed class LayoutEngineTests
         var firstLine = layout.Pages[0].Paragraphs.Single().Lines[0];
 
         firstLine.Text.ShouldBe(
-            string.Join(' ', Enumerable.Repeat("word", 17)));
+            string.Join(' ', Enumerable.Repeat("word", 17)) + " ");
         firstLine.Bounds.X.ShouldBe(72);
         firstLine.Bounds.Y.ShouldBe(72);
-        firstLine.Bounds.Width.ShouldBe(462, 0.0001);
+        firstLine.Bounds.Width.ShouldBe(467.5, 0.0001);
         firstLine.Bounds.Height.ShouldBe(12.65, 0.0001);
     }
 

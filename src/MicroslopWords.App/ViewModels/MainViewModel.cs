@@ -10,7 +10,7 @@ using MicroslopWords.Layout;
 
 namespace MicroslopWords.App.ViewModels;
 
-public partial class MainViewModel : ViewModelBase, IDisposable
+public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 {
     private static readonly StringComparison PathComparison =
         OperatingSystem.IsWindows()
@@ -31,7 +31,6 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private readonly TimeSpan _autosaveInterval;
     private readonly TimeProvider _timeProvider;
     private readonly LayoutEngine _layoutEngine;
-    private readonly bool _isReadOnly = true;
     private CommandHistory _history;
     private IReadOnlyList<Diagnostic> _documentDiagnostics = [];
     private CancellationTokenSource? _saveCancellation;
@@ -39,6 +38,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private bool _recoveryWarningShown;
     private bool _recoveryUnavailableNoticeShown;
     private bool _applyingFit;
+    private bool _updatingSelection;
     private int _documentGeneration;
 
     public MainViewModel()
@@ -220,6 +220,16 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     public partial DocumentLayout? Layout { get; set; }
 
     [ObservableProperty]
+    public partial Document Document { get; set; } =
+        MicroslopWords.Core.Documents.Document.CreateEmpty();
+
+    [ObservableProperty]
+    public partial Selection Selection { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsReadOnly { get; set; } = true;
+
+    [ObservableProperty]
     public partial double Zoom { get; set; } = 1.0;
 
     [ObservableProperty]
@@ -232,9 +242,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     public double ViewportHeight { get; private set; }
 
-    public bool IsReadOnly => _isReadOnly;
-
-    public bool IsEditingEnabled => !_isReadOnly;
+    public bool IsEditingEnabled => !IsReadOnly && !IsLoading && !IsSaving;
 
     public bool CanStartAction => !IsLoading && !IsSaving;
 
@@ -385,6 +393,92 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
     private void Find() => StatusText = "Find is planned for STORY-008.";
 
+    public bool CanUndo => _history.CanUndo;
+
+    public bool CanRedo => _history.CanRedo;
+
+    [RelayCommand(CanExecute = nameof(CanUndo))]
+    private void Undo()
+    {
+        if (!_history.CanUndo)
+        {
+            return;
+        }
+
+        _history.Undo();
+        FinishEdit();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRedo))]
+    private void Redo()
+    {
+        if (!_history.CanRedo)
+        {
+            return;
+        }
+
+        _history.Redo();
+        FinishEdit();
+    }
+
+    public void InsertText(string text)
+    {
+        if (!IsEditingEnabled || string.IsNullOrEmpty(text))
+        {
+            return;
+        }
+
+        ExecuteEdit(new InsertTextAtSelectionCommand(_history.Selection, text));
+    }
+
+    public void Backspace()
+    {
+        if (IsEditingEnabled)
+        {
+            ExecuteEdit(new DeleteBackwardCommand(_history.Selection));
+        }
+    }
+
+    public void DeleteForward()
+    {
+        if (IsEditingEnabled)
+        {
+            ExecuteEdit(new DeleteForwardCommand(_history.Selection));
+        }
+    }
+
+    public void DeleteWordBackward()
+    {
+        if (IsEditingEnabled)
+        {
+            ExecuteEdit(new DeleteWordBackwardCommand(_history.Selection));
+        }
+    }
+
+    public void DeleteWordForward()
+    {
+        if (IsEditingEnabled)
+        {
+            ExecuteEdit(new DeleteWordForwardCommand(_history.Selection));
+        }
+    }
+
+    public void SplitParagraph()
+    {
+        if (IsEditingEnabled)
+        {
+            ExecuteEdit(new SplitParagraphCommand(_history.Selection));
+        }
+    }
+
+    public void InsertSoftBreak()
+    {
+        if (IsEditingEnabled)
+        {
+            ExecuteEdit(new InsertSoftBreakCommand(_history.Selection));
+        }
+    }
+
     [RelayCommand]
     private void ZoomIn()
     {
@@ -440,9 +534,45 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         ArgumentNullException.ThrowIfNull(command);
 
-        var document = _history.Execute(command);
+        _history.Execute(command);
+        FinishEdit();
+    }
+
+    private void ExecuteEdit(DocumentEditCommand command)
+    {
+        _history.Execute(command);
+        FinishEdit();
+    }
+
+    private void FinishEdit()
+    {
+        Document = _history.Current;
+        Layout = _layoutEngine.Layout(_history.Current);
         IsModified = true;
-        Layout = _layoutEngine.Layout(document);
+        SyncSelectionFromHistory();
+        NotifyHistoryCommands();
+    }
+
+    private void SyncSelectionFromHistory()
+    {
+        _updatingSelection = true;
+
+        try
+        {
+            Selection = _history.Selection;
+        }
+        finally
+        {
+            _updatingSelection = false;
+        }
+    }
+
+    private void NotifyHistoryCommands()
+    {
+        OnPropertyChanged(nameof(CanUndo));
+        OnPropertyChanged(nameof(CanRedo));
+        UndoCommand.NotifyCanExecuteChanged();
+        RedoCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnDocumentTitleChanged(string value) => UpdateWindowTitle();
@@ -490,10 +620,28 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     partial void OnCurrentPageChanged(int value) =>
         OnPropertyChanged(nameof(PageLabel));
 
+    partial void OnSelectionChanged(Selection value)
+    {
+        if (_updatingSelection)
+        {
+            return;
+        }
+
+        _history.SetSelection(value);
+
+        if (_history.Selection != value)
+        {
+            SyncSelectionFromHistory();
+        }
+    }
+
+    partial void OnIsReadOnlyChanged(bool value) => NotifyEditingEnabledChanged();
+
     partial void OnIsLoadingChanged(bool value)
     {
         OnPropertyChanged(nameof(CanStartAction));
         NotifyActionCommands();
+        NotifyEditingEnabledChanged();
     }
 
     partial void OnIsSavingChanged(bool value)
@@ -502,7 +650,17 @@ public partial class MainViewModel : ViewModelBase, IDisposable
         OnPropertyChanged(nameof(CanCancelSave));
         OnPropertyChanged(nameof(SaveStateText));
         NotifyActionCommands();
+        NotifyEditingEnabledChanged();
         CancelSaveCommand.NotifyCanExecuteChanged();
+    }
+
+    private void NotifyEditingEnabledChanged()
+    {
+        OnPropertyChanged(nameof(IsEditingEnabled));
+        ToggleBoldCommand.NotifyCanExecuteChanged();
+        ToggleItalicCommand.NotifyCanExecuteChanged();
+        ToggleUnderlineCommand.NotifyCanExecuteChanged();
+        FindCommand.NotifyCanExecuteChanged();
     }
 
     partial void OnErrorMessageChanged(string value) =>
@@ -780,12 +938,17 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         _history = new CommandHistory(document);
         _documentDiagnostics = diagnostics ?? [];
+        IsReadOnly = _documentDiagnostics.Any(
+            diagnostic => diagnostic.Severity == DiagnosticSeverity.Warning);
         FilePath = filePath ?? string.Empty;
         DocumentTitle = document.Title;
+        Document = document;
         IsModified = false;
+        SyncSelectionFromHistory();
         Layout = _layoutEngine.Layout(document);
         _recoveryWarningShown = false;
         _recoveryUnavailableNoticeShown = false;
+        NotifyHistoryCommands();
         UpdateWindowTitle();
     }
 

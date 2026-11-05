@@ -21,11 +21,13 @@ Questions and decisions intentionally deferred from planning. Resolve the item a
 
 - `DEF-005` (resolved during `STORY-003`): v1 keeps at most 20 recovery snapshots, one per document identity; a newer snapshot supersedes the prior snapshot for the same document, and a successful save removes that document's snapshot. Startup offers each snapshot with Open recovered draft, Discard (confirmed), or Later. Recovered drafts open unsaved with no source path, and recovery is disabled with a diagnostic for documents containing unsupported content.
 - `DEF-002` (resolved during `STORY-005`): the supported canvas zoom range is `25–400%`, following `SPEC.md` and superseding the UX `50–400%` assumption. The page canvas clamps all zoom inputs to that range.
+- `STORY-006` checkpoint (resolved in ADR 0005): selection positions are paragraph/run/UTF-16 identities with line affinity, soft breaks are `\n` inside runs, IME composition is transient, and imports with unsupported-content warnings stay read-only.
 
 ## Planning Notes
 
 - `sprint_plan.py` could not parse the project’s `### STORY-NNN` headings; `sprint-status.yaml` was built against the template and validated successfully.
 - `STORY-001` is read-only by design; editable CAP-1 behavior is completed in `STORY-006`.
+- Manual IME smoke on Windows, macOS, and Linux remains for release validation; `STORY-006` covers the simulated IME client and headless composition flow.
 - Human checkpoints are required after `STORY-016` and `STORY-020`, and SPEC checkpoints are required at `STORY-004`, `STORY-006`, `STORY-016`, `STORY-018`, and `STORY-020`.
 
 ## Build-Loop Failures

@@ -76,6 +76,25 @@ public sealed class DocxServiceTests
     }
 
     [Fact]
+    public void SaveAndLoad_round_trips_soft_line_breaks()
+    {
+        var paragraph = ParagraphBlock.Create("first\nsecond\n");
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(paragraph));
+        var document = new Document(Guid.NewGuid(), "Breaks", ImmutableArray.Create(section));
+
+        using var stream = new MemoryStream();
+        DocxService.Save(document, stream);
+        stream.Position = 0;
+
+        var loaded = DocxService.Load(stream, "Breaks", TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue();
+        loaded.Value!.PlainText.ShouldBe("first\nsecond\n");
+    }
+
+    [Fact]
     public void Load_imports_unicode_text()
     {
         var paragraph = new ParagraphBlock(

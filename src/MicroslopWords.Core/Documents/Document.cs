@@ -35,6 +35,70 @@ public sealed record Document(
             .OfType<ParagraphBlock>()
             .FirstOrDefault(paragraph => paragraph.Id == paragraphId);
 
+    public Document InsertBlockAfter(Guid afterBlockId, Block block)
+    {
+        ArgumentNullException.ThrowIfNull(block);
+
+        var sections = Sections
+            .Select(section =>
+            {
+                var index = IndexOfBlock(section.Blocks, afterBlockId);
+
+                if (index < 0)
+                {
+                    return section;
+                }
+
+                return section with { Blocks = section.Blocks.Insert(index + 1, block) };
+            })
+            .ToImmutableArray();
+
+        return this with { Sections = sections };
+    }
+
+    public Document RemoveBlock(Guid blockId)
+    {
+        var sections = Sections
+            .Select(section =>
+            {
+                var index = IndexOfBlock(section.Blocks, blockId);
+
+                if (index < 0)
+                {
+                    return section;
+                }
+
+                return section with { Blocks = section.Blocks.RemoveAt(index) };
+            })
+            .ToImmutableArray();
+
+        return this with { Sections = sections };
+    }
+
+    public Document ReplaceSection(Section replacement)
+    {
+        ArgumentNullException.ThrowIfNull(replacement);
+
+        var sections = Sections
+            .Select(section => section.Id == replacement.Id ? replacement : section)
+            .ToImmutableArray();
+
+        return this with { Sections = sections };
+    }
+
+    private static int IndexOfBlock(ImmutableArray<Block> blocks, Guid blockId)
+    {
+        for (var index = 0; index < blocks.Length; index++)
+        {
+            if (blocks[index].Id == blockId)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
     private static ImmutableArray<Block> Replace(ImmutableArray<Block> blocks, Block replacement)
     {
         var builder = ImmutableArray.CreateBuilder<Block>(blocks.Length);
