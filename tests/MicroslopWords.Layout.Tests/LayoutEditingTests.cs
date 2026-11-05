@@ -151,6 +151,30 @@ public sealed class LayoutEditingTests
         hit!.Value.ParagraphOffset.ShouldBe(lines[1].TextStart);
     }
 
+    [Fact]
+    public void Selection_geometry_can_span_multiple_pages()
+    {
+        var text = string.Join(' ', Enumerable.Repeat("word", 2000));
+        var document = CreateDocument(text);
+        var layout = new LayoutEngine().Layout(document);
+        var paragraph = layout.Pages[0].Paragraphs[0];
+
+        var start = LayoutHitTesting.FindCaret(
+            layout,
+            paragraph.ParagraphId,
+            0,
+            TextAffinity.Downstream);
+        var end = LayoutHitTesting.FindCaret(
+            layout,
+            paragraph.ParagraphId,
+            text.Length,
+            TextAffinity.Upstream);
+
+        start.ShouldNotBeNull();
+        end.ShouldNotBeNull();
+        start.Page.PageNumber.ShouldBe(1);
+        end.Page.PageNumber.ShouldBe(3);
+    }
     private static Document CreateDocument(string text)
     {
         var paragraph = ParagraphBlock.Create(text);

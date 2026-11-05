@@ -149,6 +149,12 @@ public sealed class MainViewModelTests
 
         viewModel.IsReadOnly.ShouldBeTrue();
         viewModel.IsEditingEnabled.ShouldBeFalse();
+        viewModel.CanCut.ShouldBeFalse();
+        viewModel.CanPaste.ShouldBeFalse();
+
+        viewModel.SelectAllCommand.Execute(null);
+
+        viewModel.CanCopy.ShouldBeTrue();
 
         viewModel.InsertText("x");
 
@@ -669,6 +675,220 @@ public sealed class MainViewModelTests
         viewModel.ErrorMessage.ShouldContain("Only .docx");
     }
 
+    [Fact]
+    public async Task Copy_writes_the_selection_without_changing_the_document()
+    {
+        var clipboard = new FakeClipboardService();
+        var viewModel = CreateViewModel(clipboard);
+        viewModel.InsertText("Hello world");
+        var position = viewModel.Selection.Focus;
+        var before = viewModel.Document;
+
+        viewModel.Selection = new Selection(
+            new TextPosition(position.ParagraphId, position.RunId, 6),
+            new TextPosition(position.ParagraphId, position.RunId, 11));
+
+        await viewModel.CopyCommand.ExecuteAsync(null);
+
+        clipboard.Written.ShouldNotBeNull();
+        clipboard.Written.Text.ShouldBe("world");
+        clipboard.Written.Html.ShouldNotBeNullOrEmpty();
+        clipboard.Written.Fragment.ShouldNotBeNull();
+        viewModel.Document.ShouldBeSameAs(before);
+        viewModel.CanUndo.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Cut_removes_the_selection_as_one_undo_step()
+    {
+        var clipboard = new FakeClipboardService();
+        var viewModel = CreateViewModel(clipboard);
+        viewModel.InsertText("Hello world");
+        var position = viewModel.Selection.Focus;
+
+        viewModel.Selection = new Selection(
+            new TextPosition(position.ParagraphId, position.RunId, 6),
+            new TextPosition(position.ParagraphId, position.RunId, 11));
+
+        await viewModel.CutCommand.ExecuteAsync(null);
+
+        viewModel.Document.PlainText.ShouldBe("Hello ");
+        clipboard.Written!.Text.ShouldBe("world");
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("Hello world");
+    }
+
+    [Fact]
+    public async Task Paste_internal_fragment_round_trips_the_copied_text()
+    {
+        var clipboard = new FakeClipboardService();
+        var viewModel = CreateViewModel(clipboard);
+        viewModel.InsertText("Hello world");
+        var position = viewModel.Selection.Focus;
+
+        viewModel.Selection = new Selection(
+            new TextPosition(position.ParagraphId, position.RunId, 6),
+            new TextPosition(position.ParagraphId, position.RunId, 11));
+        await viewModel.CopyCommand.ExecuteAsync(null);
+
+        viewModel.Selection = Selection.Caret(position);
+        await viewModel.PasteCommand.ExecuteAsync(null);
+
+        viewModel.Document.PlainText.ShouldBe("Hello worldworld");
+    }
+
+    [Fact]
+    public async Task Paste_html_maps_formatting_and_ignores_scripts()
+    {
+        var clipboard = new FakeClipboardService
+        {
+            Content = new ClipboardContent(
+                string.Empty,
+                "<p><b>Bold</b> <script>alert(1)</script>text</p>"),
+        };
+        var viewModel = CreateViewModel(clipboard);
+
+        await viewModel.PasteCommand.ExecuteAsync(null);
+
+        viewModel.Document.PlainText.ShouldBe("Bold text");
+
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single();
+
+        paragraph.Runs.ShouldContain(run =>
+            run.Text == "Bold" && run.EffectiveProperties.Bold);
+        viewModel.Document.PlainText.ShouldNotContain("alert");
+    }
+
+    [Fact]
+    public async Task Paste_plain_text_maps_lines_to_paragraphs()
+    {
+        var clipboard = new FakeClipboardService
+        {
+            Content = new ClipboardContent("first\r\nsecond"),
+        };
+        var viewModel = CreateViewModel(clipboard);
+
+        await viewModel.PasteCommand.ExecuteAsync(null);
+
+        var paragraphs = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToArray();
+
+        paragraphs.Length.ShouldBe(2);
+        paragraphs[0].PlainText.ShouldBe("first");
+        paragraphs[1].PlainText.ShouldBe("second");
+    }
+
+    [Fact]
+    public async Task Empty_or_image_only_clipboard_is_a_safe_no_op()
+    {
+        var clipboard = new FakeClipboardService
+        {
+            Content = new ClipboardContent(string.Empty, HasImage: true),
+        };
+        var viewModel = CreateViewModel(clipboard);
+        var before = viewModel.Document;
+
+        await viewModel.PasteCommand.ExecuteAsync(null);
+
+        viewModel.Document.ShouldBeSameAs(before);
+        viewModel.StatusText.ShouldContain("Image paste");
+
+        clipboard.Content = new ClipboardContent(string.Empty);
+
+        await viewModel.PasteCommand.ExecuteAsync(null);
+
+        viewModel.Document.ShouldBeSameAs(before);
+        viewModel.StatusText.ShouldBe("Clipboard is empty.");
+    }
+
+    [Fact]
+    public void Select_all_selects_the_whole_document()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("One");
+        viewModel.SplitParagraph();
+        viewModel.InsertText("Two");
+
+        viewModel.SelectAllCommand.Execute(null);
+
+        var start = viewModel.Selection.GetStart(viewModel.Document);
+        var end = viewModel.Selection.GetEnd(viewModel.Document);
+
+        start.Offset.ShouldBe(0);
+        end.Offset.ShouldBe(3);
+        viewModel.Document.PlainText.ShouldBe($"One{Environment.NewLine}Two");
+    }
+
+    [Fact]
+    public void Rapid_typing_is_coalesced_into_one_undo_step()
+    {
+        var viewModel = CreateViewModel();
+
+        viewModel.InsertText("a");
+        viewModel.InsertText("b");
+        viewModel.InsertText("c");
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBeEmpty();
+        viewModel.CanUndo.ShouldBeFalse();
+    }
+    [Fact]
+    public void Creating_a_new_document_clears_history()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello");
+
+        viewModel.NewDocumentCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBeEmpty();
+        viewModel.CanUndo.ShouldBeFalse();
+        viewModel.CanRedo.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task Saving_does_not_clear_the_undo_history()
+    {
+        var picker = new FakeFilePicker(openPath: null, savePath: TestPath("saved.docx"));
+        var saver = new FakeDocumentSaver((_, path) => OperationResult.Success(path));
+        var viewModel = new MainViewModel(
+            picker,
+            new FakeDocumentLoader((_, _) =>
+                OperationResult.Failure<Document>("TEST", "Not used.")),
+            new LayoutEngine(),
+            saver,
+            new FakeSaveConfirmation());
+
+        viewModel.InsertText("Hello");
+
+        await viewModel.SaveDocumentAsCommand.ExecuteAsync(null);
+
+        viewModel.CanUndo.ShouldBeTrue();
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBeEmpty();
+    }
+    private static MainViewModel CreateViewModel(IClipboardService clipboard) =>
+        new(
+            new FakeFilePicker(null),
+            new FakeDocumentLoader((_, _) =>
+                OperationResult.Failure<Document>("TEST", "Not used.")),
+            new LayoutEngine(),
+            new FakeDocumentSaver((_, path) => OperationResult.Success(path)),
+            new FakeSaveConfirmation(),
+            recoveryStore: null,
+            recoveryPrompt: null,
+            TimeSpan.FromSeconds(60),
+            TimeProvider.System,
+            clipboard);
     private static MainViewModel CreateViewModel() =>
         new(
             new FakeFilePicker(null),
@@ -696,6 +916,25 @@ public sealed class MainViewModelTests
         return new Document(Guid.NewGuid(), title, ImmutableArray.Create(section));
     }
 
+    private sealed class FakeClipboardService : IClipboardService
+    {
+        public ClipboardContent? Content { get; set; }
+
+        public ClipboardContent? Written { get; private set; }
+
+        public Task<ClipboardContent?> ReadAsync(
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult(Content);
+
+        public Task<bool> WriteAsync(
+            ClipboardContent content,
+            CancellationToken cancellationToken = default)
+        {
+            Written = content;
+            Content = content;
+            return Task.FromResult(true);
+        }
+    }
     private sealed class FakeFilePicker(string? openPath, string? savePath = null) : IDocxFilePicker
     {
         public int SavePickerCalls { get; private set; }

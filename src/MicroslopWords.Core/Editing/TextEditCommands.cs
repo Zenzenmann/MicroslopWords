@@ -39,13 +39,22 @@ public sealed class InsertTextAtSelectionCommand(
     Selection selection,
     string text) : DocumentEditCommand
 {
-    public override string Description => $"Insert \"{text}\"";
+    public Selection SelectionBefore { get; } = selection;
+
+    public string Text { get; } = text;
+
+    public bool CanCoalesce =>
+        SelectionBefore.IsCollapsed
+        && Text.Length > 0
+        && !Text.Contains('\n');
+
+    public override string Description => $"Insert \"{Text}\"";
 
     protected override Document ApplyCore(
         Document document,
         out Selection selectionAfter)
     {
-        var current = SelectionMap.Normalize(selection, document);
+        var current = SelectionMap.Normalize(SelectionBefore, document);
         var caret = current.GetStart(document);
         var result = document;
 
@@ -57,7 +66,7 @@ public sealed class InsertTextAtSelectionCommand(
                 current.GetEnd(document));
         }
 
-        (result, caret) = TextEditOperations.InsertText(result, caret, text);
+        (result, caret) = TextEditOperations.InsertText(result, caret, Text);
         selectionAfter = Selection.Caret(caret);
 
         return result;
@@ -386,6 +395,80 @@ public sealed class MergeParagraphCommand(
             : TextEditOperations.MergeWithNext(document, paragraphId);
 
         selectionAfter = Selection.Caret(caret);
+        return result;
+    }
+}
+public sealed class PasteTextCommand(
+    Selection selection,
+    string text) : DocumentEditCommand
+{
+    public override string Description => "Paste text";
+
+    protected override Document ApplyCore(
+        Document document,
+        out Selection selectionAfter)
+    {
+        var current = SelectionMap.Normalize(selection, document);
+        var caret = current.GetStart(document);
+        var result = document;
+        var normalized = text.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n');
+        if (normalized.Length == 0)
+        {
+            selectionAfter = current;
+            return document;
+        }
+
+        var lines = normalized.Split('\n');
+
+        if (!current.IsCollapsed)
+        {
+            (result, caret) = TextEditOperations.DeleteRange(
+                result,
+                current.GetStart(document),
+                current.GetEnd(document));
+        }
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            (result, caret) = TextEditOperations.InsertText(result, caret, lines[index]);
+
+            if (index < lines.Length - 1)
+            {
+                (result, caret) = TextEditOperations.SplitParagraph(result, caret);
+            }
+        }
+
+        selectionAfter = Selection.Caret(caret);
+        return result;
+    }
+}
+
+public sealed class PasteFragmentCommand(
+    Selection selection,
+    DocumentFragment fragment) : DocumentEditCommand
+{
+    public override string Description => "Paste content";
+
+    protected override Document ApplyCore(
+        Document document,
+        out Selection selectionAfter)
+    {
+        var current = SelectionMap.Normalize(selection, document);
+        var caret = current.GetStart(document);
+        var result = document;
+
+        if (!current.IsCollapsed)
+        {
+            (result, caret) = TextEditOperations.DeleteRange(
+                result,
+                current.GetStart(document),
+                current.GetEnd(document));
+        }
+
+        (result, caret) = TextEditOperations.InsertFragment(result, caret, fragment);
+        selectionAfter = Selection.Caret(caret);
+
         return result;
     }
 }

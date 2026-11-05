@@ -181,6 +181,75 @@ public sealed class DocumentPreviewControlTests
         rectangle.Height.ShouldBeGreaterThan(0);
     }
 
+    [AvaloniaFact]
+    public void Double_click_selects_a_word_and_triple_click_selects_a_paragraph()
+    {
+        var document = CreateDocument("Hello brave world");
+        var control = CreateEditingControl(document, out _);
+        var scale = PageViewport.PageScale(1);
+        var wordPoint = new Point(
+            DocumentPreviewControl.OuterMarginDips + ((72 + (6 * 5.5) + 2) * scale),
+            DocumentPreviewControl.OuterMarginDips + (72 * scale) + 2);
+
+        control.SelectWordAt(wordPoint).ShouldBeTrue();
+
+        var selection = control.Selection;
+        selection.GetStart(document).Offset.ShouldBe(6);
+        selection.GetEnd(document).Offset.ShouldBe(11);
+
+        control.SelectParagraphAt(wordPoint).ShouldBeTrue();
+
+        control.Selection.GetStart(document).Offset.ShouldBe(0);
+        control.Selection.GetEnd(document).Offset.ShouldBe(17);
+    }
+
+    [AvaloniaFact]
+    public void Ctrl_arrow_moves_by_word_and_ctrl_home_end_jumps_to_document_edges()
+    {
+        var document = CreateDocument("Hello brave world");
+        var paragraph = (ParagraphBlock)document.Sections[0].Blocks[0];
+        var run = paragraph.Runs[0];
+        var control = CreateEditingControl(document, out _);
+
+        control.Selection = Selection.Caret(
+            new TextPosition(paragraph.Id, run.Id, 0));
+
+        control.HandleKey(Key.Right, KeyModifiers.Control).ShouldBeTrue();
+        control.Selection.Focus.Offset.ShouldBe(6);
+
+        control.HandleKey(Key.Right, KeyModifiers.Control).ShouldBeTrue();
+        control.Selection.Focus.Offset.ShouldBe(12);
+
+        control.HandleKey(Key.Left, KeyModifiers.Control).ShouldBeTrue();
+        control.Selection.Focus.Offset.ShouldBe(6);
+
+        control.HandleKey(Key.End, KeyModifiers.Control).ShouldBeTrue();
+        control.Selection.Focus.Offset.ShouldBe(17);
+
+        control.HandleKey(Key.Home, KeyModifiers.Control).ShouldBeTrue();
+        control.Selection.Focus.Offset.ShouldBe(0);
+    }
+
+    [AvaloniaFact]
+    public void Dragging_with_shift_extends_the_selection_from_the_anchor()
+    {
+        var document = CreateDocument("Hello");
+        var paragraph = (ParagraphBlock)document.Sections[0].Blocks[0];
+        var run = paragraph.Runs[0];
+        var control = CreateEditingControl(document, out _);
+        var scale = PageViewport.PageScale(1);
+        var point = new Point(
+            DocumentPreviewControl.OuterMarginDips + ((72 + (5 * 5.5) + 1) * scale),
+            DocumentPreviewControl.OuterMarginDips + (72 * scale) + 2);
+
+        control.Selection = Selection.Caret(
+            new TextPosition(paragraph.Id, run.Id, 0));
+        control.SetCaretFromContentPoint(point, extend: true).ShouldBeTrue();
+
+        control.Selection.IsCollapsed.ShouldBeFalse();
+        control.Selection.GetStart(document).Offset.ShouldBe(0);
+        control.Selection.GetEnd(document).Offset.ShouldBe(5);
+    }
     private static DocumentPreviewControl CreateEditingControl(
         Document document,
         out FakeEditorHost host)
