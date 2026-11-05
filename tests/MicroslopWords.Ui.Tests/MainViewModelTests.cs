@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MicroslopWords.App.Controls;
 using MicroslopWords.App.Services;
 using MicroslopWords.App.ViewModels;
 using MicroslopWords.Core.Diagnostics;
@@ -21,11 +22,120 @@ public sealed class MainViewModelTests
         viewModel.WindowTitle.ShouldBe("Untitled - MicroslopWords");
         viewModel.FilePath.ShouldBeEmpty();
         viewModel.PageCount.ShouldBe(1);
-        viewModel.PageLabel.ShouldBe("Page 1");
+        viewModel.PageLabel.ShouldBe("Page 1 of 1");
         viewModel.IsModified.ShouldBeFalse();
         viewModel.IsReadOnly.ShouldBeTrue();
         viewModel.IsEditingEnabled.ShouldBeFalse();
         viewModel.SaveStateText.ShouldBe("Not saved");
+    }
+
+    [Fact]
+    public void Zoom_commands_clamp_and_update_the_status_text()
+    {
+        var viewModel = CreateViewModel();
+
+        for (var index = 0; index < 40; index++)
+        {
+            viewModel.ZoomInCommand.Execute(null);
+        }
+
+        viewModel.Zoom.ShouldBe(4);
+        viewModel.ZoomPercentText.ShouldBe("400%");
+
+        for (var index = 0; index < 60; index++)
+        {
+            viewModel.ZoomOutCommand.Execute(null);
+        }
+
+        viewModel.Zoom.ShouldBe(0.25);
+        viewModel.ZoomPercentText.ShouldBe("25%");
+
+        viewModel.ResetZoomCommand.Execute(null);
+
+        viewModel.Zoom.ShouldBe(1);
+        viewModel.ZoomMode.ShouldBe(ZoomFitMode.Custom);
+    }
+
+    [Fact]
+    public void Fit_width_recomputes_when_the_viewport_changes()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetViewport(864, 1104);
+
+        viewModel.FitWidthCommand.Execute(null);
+
+        viewModel.ZoomMode.ShouldBe(ZoomFitMode.FitWidth);
+        viewModel.Zoom.ShouldBe(1, 0.0001);
+
+        viewModel.SetViewport(432, 1104);
+
+        viewModel.Zoom.ShouldBe(0.4706, 0.0001);
+    }
+
+    [Fact]
+    public void Direct_zoom_changes_leave_fit_mode()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetViewport(864, 1104);
+        viewModel.FitWidthCommand.Execute(null);
+
+        viewModel.Zoom = 1.5;
+
+        viewModel.ZoomMode.ShouldBe(ZoomFitMode.Custom);
+    }
+
+    [Fact]
+    public void Fit_page_uses_the_smaller_axis()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.SetViewport(864, 1104);
+
+        viewModel.FitPageCommand.Execute(null);
+
+        viewModel.ZoomMode.ShouldBe(ZoomFitMode.FitPage);
+        viewModel.Zoom.ShouldBe(1, 0.0001);
+    }
+
+    [Fact]
+    public void Zoom_does_not_change_the_layout()
+    {
+        var viewModel = CreateViewModel();
+        var layout = viewModel.Layout;
+
+        viewModel.SetViewport(864, 1104);
+        viewModel.FitPageCommand.Execute(null);
+        viewModel.ZoomInCommand.Execute(null);
+        viewModel.ZoomOutCommand.Execute(null);
+        viewModel.ResetZoomCommand.Execute(null);
+
+        viewModel.Layout.ShouldBeSameAs(layout);
+        viewModel.PageCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task Open_updates_page_count_and_page_label_for_multi_page_documents()
+    {
+        var text = string.Join(' ', Enumerable.Repeat("word", 2000));
+        var picker = new FakeFilePicker(TestPath("long.docx"));
+        var loader = new FakeDocumentLoader((_, _) =>
+            OperationResult.Success(CreateDocument("Long", text)));
+        var viewModel = new MainViewModel(picker, loader, new LayoutEngine());
+
+        await viewModel.OpenDocumentCommand.ExecuteAsync(null);
+
+        viewModel.PageCount.ShouldBe(3);
+        viewModel.PageLabel.ShouldBe("Page 1 of 3");
+        viewModel.CurrentPage.ShouldBe(1);
+    }
+
+    [Fact]
+    public void Page_label_uses_the_current_page_and_total()
+    {
+        var viewModel = CreateViewModel();
+
+        viewModel.CurrentPage = 3;
+
+        viewModel.PageLabel.ShouldBe("Page 1 of 1");
     }
 
     [Fact]
@@ -452,9 +562,9 @@ public sealed class MainViewModelTests
         viewModel.ApplyEdit(new InsertTextCommand(paragraph.Id, Run.Create(" edited")));
     }
 
-    private static Document CreateDocument(string title)
+    private static Document CreateDocument(string title, string text = "Hello")
     {
-        var paragraph = ParagraphBlock.Create("Hello");
+        var paragraph = ParagraphBlock.Create(text);
         var section = new Section(Guid.NewGuid(), ImmutableArray.Create<Block>(paragraph));
         return new Document(Guid.NewGuid(), title, ImmutableArray.Create(section));
     }

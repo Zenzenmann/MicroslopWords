@@ -1,10 +1,18 @@
 namespace MicroslopWords.Core.Documents;
 
+public enum PageOrientation
+{
+    Portrait,
+    Landscape,
+}
+
 public sealed record PageSettings
 {
     public double WidthPoints { get; init; } = 612;
 
     public double HeightPoints { get; init; } = 792;
+
+    public PageOrientation Orientation { get; init; } = PageOrientation.Portrait;
 
     public double MarginLeftPoints { get; init; } = 72;
 
@@ -22,7 +30,15 @@ public sealed record PageSettings
         HeightPoints = 841.89,
     };
 
-    public double ContentWidthPoints => WidthPoints - MarginLeftPoints - MarginRightPoints;
+    public double EffectiveWidthPoints =>
+        Orientation == PageOrientation.Landscape ? HeightPoints : WidthPoints;
 
-    public double ContentHeightPoints => HeightPoints - MarginTopPoints - MarginBottomPoints;
+    public double EffectiveHeightPoints =>
+        Orientation == PageOrientation.Landscape ? WidthPoints : HeightPoints;
+
+    public double ContentWidthPoints =>
+        EffectiveWidthPoints - MarginLeftPoints - MarginRightPoints;
+
+    public double ContentHeightPoints =>
+        EffectiveHeightPoints - MarginTopPoints - MarginBottomPoints;
 }

@@ -26,17 +26,20 @@ public sealed class LayoutEngine
         ArgumentNullException.ThrowIfNull(document);
 
         var catalog = fontCatalog ?? _fontCatalog;
-        var page = pageSettings ?? PageSettings.Letter;
-        var contentWidth = constraints?.MaxWidthPoints ?? page.ContentWidthPoints;
-        var contentHeight = constraints?.MaxHeightPoints ?? page.ContentHeightPoints;
-        var pageBottom = page.MarginTopPoints + contentHeight;
+        var defaultPage = pageSettings
+            ?? document.Sections.FirstOrDefault()?.EffectivePage
+            ?? PageSettings.Letter;
+        var activePage = defaultPage;
+        var contentWidth = constraints?.MaxWidthPoints ?? defaultPage.ContentWidthPoints;
+        var contentHeight = constraints?.MaxHeightPoints ?? defaultPage.ContentHeightPoints;
+        var pageBottom = activePage.MarginTopPoints + contentHeight;
 
         using var shaper = new TextShaper(catalog);
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
         var pages = ImmutableArray.CreateBuilder<PageLayout>();
         var paragraphs = ImmutableArray.CreateBuilder<ParagraphLayout>();
         var pageNumber = 1;
-        var cursorY = page.MarginTopPoints;
+        var cursorY = activePage.MarginTopPoints;
 
         void FlushPage()
         {
@@ -47,16 +50,31 @@ public sealed class LayoutEngine
 
             pages.Add(new PageLayout(
                 pageNumber,
-                new LayoutRect(0, 0, page.WidthPoints, page.HeightPoints),
+                new LayoutRect(
+                    0,
+                    0,
+                    activePage.EffectiveWidthPoints,
+                    activePage.EffectiveHeightPoints),
                 paragraphs.ToImmutable()));
 
             paragraphs.Clear();
             pageNumber++;
-            cursorY = page.MarginTopPoints;
+            cursorY = activePage.MarginTopPoints;
         }
 
         foreach (var section in document.Sections)
         {
+            if (paragraphs.Count > 0)
+            {
+                FlushPage();
+            }
+
+            activePage = pageSettings ?? section.EffectivePage;
+            contentWidth = constraints?.MaxWidthPoints ?? activePage.ContentWidthPoints;
+            contentHeight = constraints?.MaxHeightPoints ?? activePage.ContentHeightPoints;
+            pageBottom = activePage.MarginTopPoints + contentHeight;
+            cursorY = activePage.MarginTopPoints;
+
             foreach (var paragraph in section.Blocks.OfType<ParagraphBlock>())
             {
                 var fontSize = paragraph.Runs.Length == 0
@@ -90,7 +108,7 @@ public sealed class LayoutEngine
 
                     paragraphs.Add(new ParagraphLayout(
                         paragraph.Id,
-                        new LayoutRect(page.MarginLeftPoints, paragraphTop, maxLineWidth, paragraphHeight),
+                        new LayoutRect(activePage.MarginLeftPoints, paragraphTop, maxLineWidth, paragraphHeight),
                         paragraphLines.ToImmutable()));
 
                     paragraphLines.Clear();
@@ -109,7 +127,7 @@ public sealed class LayoutEngine
                     maxLineWidth = Math.Max(maxLineWidth, line.AdvanceWidthPoints);
                     paragraphLines.Add(new LineLayout(
                         line.Text,
-                        new LayoutRect(page.MarginLeftPoints, cursorY, line.AdvanceWidthPoints, lineHeight),
+                        new LayoutRect(activePage.MarginLeftPoints, cursorY, line.AdvanceWidthPoints, lineHeight),
                         fontSize,
                         line.Clusters,
                         shaped.ResolvedFont));
@@ -127,7 +145,11 @@ public sealed class LayoutEngine
         {
             pages.Add(new PageLayout(
                 1,
-                new LayoutRect(0, 0, page.WidthPoints, page.HeightPoints),
+                new LayoutRect(
+                    0,
+                    0,
+                    defaultPage.EffectiveWidthPoints,
+                    defaultPage.EffectiveHeightPoints),
                 ImmutableArray<ParagraphLayout>.Empty));
         }
 
@@ -138,8 +160,8 @@ public sealed class LayoutEngine
 
         return new DocumentLayout(
             pages.ToImmutable(),
-            page.WidthPoints,
-            page.HeightPoints,
+            defaultPage.EffectiveWidthPoints,
+            defaultPage.EffectiveHeightPoints,
             Deduplicate(diagnostics));
     }
 

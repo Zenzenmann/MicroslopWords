@@ -1,5 +1,6 @@
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
+using MicroslopWords.App.Controls;
 using MicroslopWords.App.Services;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
@@ -37,6 +38,7 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     private CancellationTokenSource? _autosaveCancellation;
     private bool _recoveryWarningShown;
     private bool _recoveryUnavailableNoticeShown;
+    private bool _applyingFit;
     private int _documentGeneration;
 
     public MainViewModel()
@@ -217,6 +219,19 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [ObservableProperty]
     public partial DocumentLayout? Layout { get; set; }
 
+    [ObservableProperty]
+    public partial double Zoom { get; set; } = 1.0;
+
+    [ObservableProperty]
+    public partial int CurrentPage { get; set; } = 1;
+
+    [ObservableProperty]
+    public partial ZoomFitMode ZoomMode { get; set; } = ZoomFitMode.Custom;
+
+    public double ViewportWidth { get; private set; }
+
+    public double ViewportHeight { get; private set; }
+
     public bool IsReadOnly => _isReadOnly;
 
     public bool IsEditingEnabled => !_isReadOnly;
@@ -240,7 +255,12 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     public int PageCount => Layout?.Pages.Length ?? 0;
 
-    public string PageLabel => $"Page {PageCount}";
+    public string PageLabel =>
+        PageCount == 0
+            ? "Page 1 of 1"
+            : $"Page {Math.Clamp(CurrentPage, 1, PageCount)} of {PageCount}";
+
+    public string ZoomPercentText => $"{Zoom * 100:0}%";
 
     public CommandHistory History => _history;
 
@@ -365,6 +385,57 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
     private void Find() => StatusText = "Find is planned for STORY-008.";
 
+    [RelayCommand]
+    private void ZoomIn()
+    {
+        ZoomMode = ZoomFitMode.Custom;
+        Zoom = PageViewport.ZoomIn(Zoom);
+    }
+
+    [RelayCommand]
+    private void ZoomOut()
+    {
+        ZoomMode = ZoomFitMode.Custom;
+        Zoom = PageViewport.ZoomOut(Zoom);
+    }
+
+    [RelayCommand]
+    private void ResetZoom()
+    {
+        ZoomMode = ZoomFitMode.Custom;
+        Zoom = 1;
+    }
+
+    [RelayCommand]
+    private void FitWidth()
+    {
+        ZoomMode = ZoomFitMode.FitWidth;
+        ApplyFit();
+    }
+
+    [RelayCommand]
+    private void FitPage()
+    {
+        ZoomMode = ZoomFitMode.FitPage;
+        ApplyFit();
+    }
+
+    public void SetViewport(double width, double height)
+    {
+        if (!double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        ViewportWidth = width;
+        ViewportHeight = height;
+
+        if (ZoomMode != ZoomFitMode.Custom)
+        {
+            ApplyFit();
+        }
+    }
+
     internal void ApplyEdit(IEditCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
@@ -396,9 +467,28 @@ public partial class MainViewModel : ViewModelBase, IDisposable
 
     partial void OnLayoutChanged(DocumentLayout? value)
     {
+        CurrentPage = Math.Clamp(CurrentPage, 1, Math.Max(1, PageCount));
         OnPropertyChanged(nameof(PageCount));
         OnPropertyChanged(nameof(PageLabel));
+
+        if (ZoomMode != ZoomFitMode.Custom)
+        {
+            ApplyFit();
+        }
     }
+
+    partial void OnZoomChanged(double value)
+    {
+        OnPropertyChanged(nameof(ZoomPercentText));
+
+        if (!_applyingFit)
+        {
+            ZoomMode = ZoomFitMode.Custom;
+        }
+    }
+
+    partial void OnCurrentPageChanged(int value) =>
+        OnPropertyChanged(nameof(PageLabel));
 
     partial void OnIsLoadingChanged(bool value)
     {
@@ -783,6 +873,36 @@ public partial class MainViewModel : ViewModelBase, IDisposable
     {
         var name = string.IsNullOrWhiteSpace(DocumentTitle) ? "Untitled" : DocumentTitle;
         return $"{name}.docx";
+    }
+
+    private void ApplyFit()
+    {
+        if (Layout is null || ViewportWidth <= 0 || ViewportHeight <= 0)
+        {
+            return;
+        }
+
+        _applyingFit = true;
+
+        try
+        {
+            Zoom = ZoomMode == ZoomFitMode.FitPage
+                ? PageViewport.ZoomForFitPage(
+                    ViewportWidth,
+                    ViewportHeight,
+                    Layout.PageWidthPoints,
+                    Layout.PageHeightPoints,
+                    PageViewport.OuterMarginDips,
+                    PageViewport.OuterMarginDips)
+                : PageViewport.ZoomForFitWidth(
+                    ViewportWidth,
+                    Layout.PageWidthPoints,
+                    PageViewport.OuterMarginDips);
+        }
+        finally
+        {
+            _applyingFit = false;
+        }
     }
 
     private void ClearMessages()
