@@ -25,6 +25,12 @@
         <KeyBinding Gesture="Meta+OemMinus" Command="{Binding ZoomOutCommand}" />
         <KeyBinding Gesture="Meta+D0" Command="{Binding ResetZoomCommand}" />
         <KeyBinding Gesture="Meta+Shift+D0" Command="{Binding FitWidthCommand}" />
+        <KeyBinding Gesture="Ctrl+Z" Command="{Binding UndoCommand}" />
+        <KeyBinding Gesture="Ctrl+Y" Command="{Binding RedoCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+Z" Command="{Binding RedoCommand}" />
+        <KeyBinding Gesture="Meta+Z" Command="{Binding UndoCommand}" />
+        <KeyBinding Gesture="Meta+Y" Command="{Binding RedoCommand}" />
+        <KeyBinding Gesture="Meta+Shift+Z" Command="{Binding RedoCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -38,8 +44,8 @@
                 <MenuItem Header="E_xit" />
             </MenuItem>
             <MenuItem Header="_Edit">
-                <MenuItem Header="_Undo" IsEnabled="False" />
-                <MenuItem Header="_Redo" IsEnabled="False" />
+                <MenuItem Header="_Undo" Command="{Binding UndoCommand}" />
+                <MenuItem Header="_Redo" Command="{Binding RedoCommand}" />
                 <Separator />
                 <MenuItem Header="_Find" Command="{Binding FindCommand}" />
             </MenuItem>
@@ -81,10 +87,16 @@
             </StackPanel>
         </Border>
 
-        <Border DockPanel.Dock="Top" Background="#EAF3FF" BorderBrush="#C8DDF7" BorderThickness="0,0,0,1" Padding="10,6">
-            <TextBlock Text="Read-only preview - editing is not available yet. Save a copy is available."
+        <Border DockPanel.Dock="Top"
+                Background="#EAF3FF"
+                BorderBrush="#C8DDF7"
+                BorderThickness="0,0,0,1"
+                Padding="10,6"
+                IsVisible="{Binding IsReadOnly}">
+            <TextBlock Text="This document contains content that cannot be edited safely yet, so it opens read-only."
                        FontSize="12"
-                       Foreground="#24527A" />
+                       Foreground="#24527A"
+                       TextWrapping="Wrap" />
         </Border>
 
         <Border DockPanel.Dock="Top"
@@ -159,6 +171,10 @@
                       Background="#E8E8E8">
             <controls:DocumentPreviewControl x:Name="PageCanvas"
                                              Layout="{Binding Layout}"
+                                             Document="{Binding Document}"
+                                             Selection="{Binding Selection, Mode=TwoWay}"
+                                             IsEditable="{Binding IsEditingEnabled}"
+                                             EditorHost="{Binding}"
                                              Zoom="{Binding Zoom, Mode=TwoWay}"
                                              CurrentPage="{Binding CurrentPage, Mode=OneWayToSource}"
                                              HorizontalAlignment="Center"

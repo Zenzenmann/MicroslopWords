@@ -14,7 +14,7 @@ namespace MicroslopWords.Ui.Tests;
 public sealed class MainViewModelTests
 {
     [Fact]
-    public void New_document_is_read_only_with_one_page()
+    public void New_document_is_editable_with_one_page()
     {
         var viewModel = CreateViewModel();
 
@@ -24,9 +24,136 @@ public sealed class MainViewModelTests
         viewModel.PageCount.ShouldBe(1);
         viewModel.PageLabel.ShouldBe("Page 1 of 1");
         viewModel.IsModified.ShouldBeFalse();
+        viewModel.IsReadOnly.ShouldBeFalse();
+        viewModel.IsEditingEnabled.ShouldBeTrue();
+        viewModel.SaveStateText.ShouldBe("Not saved");
+    }
+
+    [Fact]
+    public void InsertText_updates_document_layout_selection_and_undo_redo()
+    {
+        var viewModel = CreateViewModel();
+
+        viewModel.InsertText("Hello");
+
+        viewModel.Document.PlainText.ShouldBe("Hello");
+        viewModel.Selection.Focus.Offset.ShouldBe(5);
+        viewModel.IsModified.ShouldBeTrue();
+        viewModel.PageCount.ShouldBe(1);
+        viewModel.CanUndo.ShouldBeTrue();
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBeEmpty();
+        viewModel.Selection.Focus.Offset.ShouldBe(0);
+
+        viewModel.RedoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("Hello");
+        viewModel.Selection.Focus.Offset.ShouldBe(5);
+    }
+
+    [Fact]
+    public void Typed_selection_replacement_is_one_undo_step()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello world");
+        var runId = viewModel.Selection.Focus.RunId;
+        var paragraphId = viewModel.Selection.Focus.ParagraphId;
+
+        viewModel.Selection = new Selection(
+            new TextPosition(paragraphId, runId, 6),
+            new TextPosition(paragraphId, runId, 11));
+        viewModel.InsertText("there");
+
+        viewModel.Document.PlainText.ShouldBe("Hello there");
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("Hello world");
+    }
+
+    [Fact]
+    public void Enter_splits_and_backspace_at_start_merges_paragraphs()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello");
+
+        viewModel.SplitParagraph();
+
+        viewModel.Document.PlainText
+            .Split(Environment.NewLine)
+            .ShouldBe(["Hello", string.Empty]);
+        viewModel.Selection.Focus.Offset.ShouldBe(0);
+
+        viewModel.Backspace();
+
+        viewModel.Document.PlainText.ShouldBe("Hello");
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Count()
+            .ShouldBe(1);
+    }
+
+    [Fact]
+    public void Shift_enter_inserts_a_soft_break_without_a_new_paragraph()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello");
+
+        viewModel.InsertSoftBreak();
+        viewModel.InsertText("world");
+
+        viewModel.Document.PlainText.ShouldBe("Hello\nworld");
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Count()
+            .ShouldBe(1);
+    }
+
+    [Fact]
+    public void Delete_selection_removes_exact_text_and_undo_restores_it()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello brave world");
+        var position = viewModel.Selection.Focus;
+
+        viewModel.Selection = new Selection(
+            new TextPosition(position.ParagraphId, position.RunId, 6),
+            new TextPosition(position.ParagraphId, position.RunId, 12));
+        viewModel.Backspace();
+
+        viewModel.Document.PlainText.ShouldBe("Hello world");
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("Hello brave world");
+    }
+
+    [Fact]
+    public async Task Unsupported_documents_remain_read_only()
+    {
+        var picker = new FakeFilePicker(TestPath("unsupported.docx"));
+        var loader = new FakeDocumentLoader((_, _) =>
+            OperationResult.Success(
+                CreateDocument("Unsupported"),
+                [new Diagnostic(
+                    DocxDiagnosticCodes.UnsupportedTable,
+                    DiagnosticSeverity.Warning,
+                    "Tables are not shown.")]));
+        var viewModel = new MainViewModel(picker, loader, new LayoutEngine());
+
+        await viewModel.OpenDocumentCommand.ExecuteAsync(null);
+
         viewModel.IsReadOnly.ShouldBeTrue();
         viewModel.IsEditingEnabled.ShouldBeFalse();
-        viewModel.SaveStateText.ShouldBe("Not saved");
+
+        viewModel.InsertText("x");
+
+        viewModel.Document.PlainText.ShouldBe("Hello");
+        viewModel.IsModified.ShouldBeFalse();
     }
 
     [Fact]

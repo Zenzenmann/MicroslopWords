@@ -4,6 +4,8 @@ namespace MicroslopWords.Layout;
 
 public sealed record LineLayout(
     string Text,
+    int TextStart,
+    bool IsAfterSoftBreak,
     LayoutRect Bounds,
     double FontSizePoints,
     ImmutableArray<GlyphCluster> Clusters,
@@ -24,3 +26,9 @@ public sealed record DocumentLayout(
     double PageWidthPoints,
     double PageHeightPoints,
     ImmutableArray<Core.Diagnostics.Diagnostic> Diagnostics);
+
+public sealed record CaretLayout(
+    PageLayout Page,
+    int LineIndex,
+    LineLayout Line,
+    LayoutRect Bounds);

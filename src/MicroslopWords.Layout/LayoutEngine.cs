@@ -1,5 +1,4 @@
 using System.Collections.Immutable;
-using System.Text;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
 using MicroslopWords.Core.Styles;
@@ -82,14 +81,6 @@ public sealed class LayoutEngine
                     : paragraph.Runs.Max(run => run.EffectiveProperties.FontSizePoints);
                 var lineHeight = fontSize * paragraph.EffectiveProperties.LineSpacing;
                 var request = ResolveFontRequest(paragraph);
-                var shaped = shaper.Shape(paragraph.PlainText, request, fontSize);
-
-                foreach (var diagnostic in shaped.Diagnostics)
-                {
-                    diagnostics.Add(diagnostic);
-                }
-
-                var lines = WrapShapedText(shaped, contentWidth);
                 var spaceBefore = paragraph.EffectiveProperties.SpaceBeforePoints;
                 cursorY += spaceBefore;
 
@@ -115,23 +106,42 @@ public sealed class LayoutEngine
                     maxLineWidth = 0;
                 }
 
-                foreach (var line in lines)
+                var segments = SplitSoftBreakSegments(paragraph.PlainText);
+
+                for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
                 {
-                    if (cursorY + lineHeight > pageBottom
-                        && (paragraphs.Count > 0 || paragraphLines.Count > 0))
+                    var segment = segments[segmentIndex];
+                    var shaped = shaper.Shape(segment.Text, request, fontSize);
+
+                    foreach (var diagnostic in shaped.Diagnostics)
                     {
-                        FinishParagraphSegment();
-                        FlushPage();
+                        diagnostics.Add(diagnostic);
                     }
 
-                    maxLineWidth = Math.Max(maxLineWidth, line.AdvanceWidthPoints);
-                    paragraphLines.Add(new LineLayout(
-                        line.Text,
-                        new LayoutRect(activePage.MarginLeftPoints, cursorY, line.AdvanceWidthPoints, lineHeight),
-                        fontSize,
-                        line.Clusters,
-                        shaped.ResolvedFont));
-                    cursorY += lineHeight;
+                    var lines = WrapShapedText(shaped, segment.Start, contentWidth);
+
+                    for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
+                    {
+                        var line = lines[lineIndex];
+
+                        if (cursorY + lineHeight > pageBottom
+                            && (paragraphs.Count > 0 || paragraphLines.Count > 0))
+                        {
+                            FinishParagraphSegment();
+                            FlushPage();
+                        }
+
+                        maxLineWidth = Math.Max(maxLineWidth, line.AdvanceWidthPoints);
+                        paragraphLines.Add(new LineLayout(
+                            line.Text,
+                            line.TextStart,
+                            segmentIndex > 0 && lineIndex == 0,
+                            new LayoutRect(activePage.MarginLeftPoints, cursorY, line.AdvanceWidthPoints, lineHeight),
+                            fontSize,
+                            line.Clusters,
+                            shaped.ResolvedFont));
+                        cursorY += lineHeight;
+                    }
                 }
 
                 FinishParagraphSegment();
@@ -179,150 +189,142 @@ public sealed class LayoutEngine
 
     private static ImmutableArray<ShapedLine> WrapShapedText(
         ShapedText shaped,
+        int paragraphStart,
         double maxWidth)
     {
         if (shaped.Text.Length == 0)
         {
-            return ImmutableArray.Create(new ShapedLine(
-                string.Empty,
-                0,
-                shaped.ResolvedFont,
-                ImmutableArray<GlyphCluster>.Empty));
+            return
+            [
+                new ShapedLine(
+                    string.Empty,
+                    paragraphStart,
+                    0,
+                    shaped.ResolvedFont,
+                    ImmutableArray<GlyphCluster>.Empty),
+            ];
+        }
+
+        var clusters = shaped.Clusters;
+
+        if (clusters.Length == 0)
+        {
+            return
+            [
+                new ShapedLine(
+                    shaped.Text,
+                    paragraphStart,
+                    0,
+                    shaped.ResolvedFont,
+                    ImmutableArray<GlyphCluster>.Empty),
+            ];
         }
 
         var lines = ImmutableArray.CreateBuilder<ShapedLine>();
-        var currentText = new StringBuilder();
-        var currentClusters = ImmutableArray.CreateBuilder<GlyphCluster>();
+        var lineStartCluster = 0;
         var currentWidth = 0d;
+        var lastBreak = -1;
 
-        var wordBoundaries = FindWordBoundaries(shaped);
-
-        foreach (var word in wordBoundaries)
+        for (var index = 0; index < clusters.Length; index++)
         {
-            var wordWidth = SumAdvance(shaped.Clusters, word.Start, word.End);
+            currentWidth += clusters[index].Advance;
 
-            if (currentWidth > 0
-                && currentWidth + word.PrecedingSpaceWidth + wordWidth > maxWidth)
+            if (IsBreakOpportunity(shaped.Text, clusters[index]))
             {
-                lines.Add(Commit(currentText, currentWidth, currentClusters, shaped.ResolvedFont));
-                currentText.Clear();
-                currentClusters.Clear();
-                currentWidth = 0;
+                lastBreak = index;
             }
 
-            if (currentWidth > 0 && word.PrecedingSpaceWidth > 0)
+            if (currentWidth <= maxWidth || index <= lineStartCluster)
             {
-                AppendSpace(shaped, word.Start, currentText, currentClusters);
-                currentWidth += word.PrecedingSpaceWidth;
+                continue;
             }
 
-            AppendRange(shaped, word.Start, word.End, currentText, currentClusters);
-            currentWidth += wordWidth;
+            var breakAt = lastBreak >= lineStartCluster ? lastBreak : index - 1;
+            lines.Add(CommitLine(shaped, paragraphStart, lineStartCluster, breakAt));
+
+            lineStartCluster = breakAt + 1;
+            currentWidth = 0;
+            lastBreak = -1;
+
+            for (var replay = lineStartCluster; replay <= index; replay++)
+            {
+                currentWidth += clusters[replay].Advance;
+
+                if (IsBreakOpportunity(shaped.Text, clusters[replay]))
+                {
+                    lastBreak = replay;
+                }
+            }
         }
 
-        lines.Add(Commit(currentText, currentWidth, currentClusters, shaped.ResolvedFont));
+        lines.Add(CommitLine(
+            shaped,
+            paragraphStart,
+            lineStartCluster,
+            clusters.Length - 1));
+
         return lines.ToImmutable();
-
-        static ShapedLine Commit(
-            StringBuilder text,
-            double width,
-            ImmutableArray<GlyphCluster>.Builder clusters,
-            FontKey font) =>
-            new(text.ToString(), width, font, clusters.ToImmutable());
     }
 
-    private static ImmutableArray<WordBoundary> FindWordBoundaries(ShapedText shaped)
-    {
-        var boundaries = ImmutableArray.CreateBuilder<WordBoundary>();
-        var text = shaped.Text;
-        var index = 0;
-        var previousEnd = 0;
-
-        while (index < text.Length)
-        {
-            while (index < text.Length && text[index] == ' ')
-            {
-                index++;
-            }
-
-            var wordStart = index;
-
-            while (index < text.Length && text[index] != ' ')
-            {
-                index++;
-            }
-
-            if (wordStart == index)
-            {
-                break;
-            }
-
-            var precedingSpace = text.AsSpan(previousEnd, wordStart - previousEnd);
-            var spaceWidth = precedingSpace.Length == 0
-                ? 0
-                : SumAdvance(shaped.Clusters, previousEnd, wordStart);
-
-            boundaries.Add(new WordBoundary(wordStart, index, spaceWidth));
-            previousEnd = index;
-        }
-
-        if (boundaries.Count == 0 && text.Length > 0)
-        {
-            boundaries.Add(new WordBoundary(0, text.Length, 0));
-        }
-
-        return boundaries.ToImmutable();
-    }
-
-    private static double SumAdvance(
-        ImmutableArray<GlyphCluster> clusters,
-        int start,
-        int end)
-    {
-        var total = 0d;
-
-        foreach (var cluster in clusters)
-        {
-            if (cluster.TextStart >= start && cluster.TextStart < end)
-            {
-                total += cluster.Advance;
-            }
-        }
-
-        return total;
-    }
-
-    private static void AppendRange(
+    private static ShapedLine CommitLine(
         ShapedText shaped,
-        int start,
-        int end,
-        StringBuilder text,
-        ImmutableArray<GlyphCluster>.Builder clusters)
+        int paragraphStart,
+        int startCluster,
+        int endCluster)
     {
-        text.Append(shaped.Text, start, end - start);
+        var clusters = shaped.Clusters;
+        var first = clusters[startCluster];
+        var last = clusters[endCluster];
+        var textStart = first.TextStart;
+        var textLength = (last.TextStart + last.TextLength) - textStart;
+        var width = 0d;
+        var built = ImmutableArray.CreateBuilder<GlyphCluster>(
+            endCluster - startCluster + 1);
 
-        foreach (var cluster in shaped.Clusters)
+        for (var index = startCluster; index <= endCluster; index++)
         {
-            if (cluster.TextStart >= start && cluster.TextStart < end)
-            {
-                clusters.Add(cluster);
-            }
+            var cluster = clusters[index];
+            width += cluster.Advance;
+            built.Add(new GlyphCluster(
+                cluster.TextStart + paragraphStart,
+                cluster.TextLength,
+                cluster.Advance));
         }
+
+        return new ShapedLine(
+            shaped.Text.Substring(textStart, textLength),
+            paragraphStart + textStart,
+            width,
+            shaped.ResolvedFont,
+            built.ToImmutable());
     }
 
-    private static void AppendSpace(
-        ShapedText shaped,
-        int wordStart,
-        StringBuilder text,
-        ImmutableArray<GlyphCluster>.Builder clusters)
+    private static bool IsBreakOpportunity(string text, GlyphCluster cluster) =>
+        cluster.TextStart >= 0
+        && cluster.TextStart < text.Length
+        && char.IsWhiteSpace(text[cluster.TextStart]);
+
+    private static ImmutableArray<(int Start, string Text)> SplitSoftBreakSegments(
+        string text)
     {
-        text.Append(' ');
-        clusters.Add(new GlyphCluster(
-            wordStart - 1,
-            1,
-            SumAdvance(shaped.Clusters, wordStart - 1, wordStart)));
-    }
+        var segments = ImmutableArray.CreateBuilder<(int Start, string Text)>();
+        var start = 0;
 
+        for (var index = 0; index < text.Length; index++)
+        {
+            if (text[index] != '\n')
+            {
+                continue;
+            }
+
+            segments.Add((start, text[start..index]));
+            start = index + 1;
+        }
+
+        segments.Add((start, text[start..]));
+
+        return segments.ToImmutable();
+    }
     private static ImmutableArray<Diagnostic> Deduplicate(
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
@@ -342,12 +344,8 @@ public sealed class LayoutEngine
 
     private readonly record struct ShapedLine(
         string Text,
+        int TextStart,
         double AdvanceWidthPoints,
         FontKey ResolvedFont,
         ImmutableArray<GlyphCluster> Clusters);
-
-    private readonly record struct WordBoundary(
-        int Start,
-        int End,
-        double PrecedingSpaceWidth);
 }

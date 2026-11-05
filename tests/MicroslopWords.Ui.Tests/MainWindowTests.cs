@@ -1,6 +1,9 @@
 using Avalonia;
+using Avalonia.Controls;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
+using MicroslopWords.App.Controls;
 using MicroslopWords.App.ViewModels;
 using MicroslopWords.App.Views;
 using Shouldly;
@@ -26,5 +29,31 @@ public sealed class MainWindowTests
 
         window.Title.ShouldBe("Untitled - MicroslopWords");
         window.DataContext.ShouldBeSameAs(viewModel);
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_wires_the_editable_canvas_to_the_view_model()
+    {
+        var viewModel = new MainViewModel();
+        var window = new MainWindow { DataContext = viewModel };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var canvas = window.FindControl<DocumentPreviewControl>("PageCanvas");
+
+        canvas.ShouldNotBeNull();
+        canvas.Document.ShouldBeSameAs(viewModel.Document);
+        canvas.IsEditable.ShouldBeTrue();
+        canvas.EditorHost.ShouldBeSameAs(viewModel);
+
+        canvas.CommitText("Hello").ShouldBeTrue();
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.Document.PlainText.ShouldBe("Hello");
+        viewModel.Selection.Focus.Offset.ShouldBe(5);
+        canvas.Document.ShouldBeSameAs(viewModel.Document);
+
+        window.Close();
     }
 }
