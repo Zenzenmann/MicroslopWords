@@ -12,7 +12,11 @@ public sealed record RunProperties
 
     public bool Underline { get; init; }
 
+    public bool Strikethrough { get; init; }
+
     public string ColorHex { get; init; } = "#000000";
+
+    public string? HighlightHex { get; init; }
 
     public static RunProperties Default { get; } = new();
 }

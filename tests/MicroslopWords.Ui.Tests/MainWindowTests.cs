@@ -1,5 +1,7 @@
 using Avalonia;
+using Avalonia.Automation;
 using Avalonia.Controls;
+using Avalonia.Controls.Primitives;
 using Avalonia.Headless;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
@@ -53,6 +55,33 @@ public sealed class MainWindowTests
         viewModel.Document.PlainText.ShouldBe("Hello");
         viewModel.Selection.Focus.Offset.ShouldBe(5);
         canvas.Document.ShouldBeSameAs(viewModel.Document);
+
+        window.Close();
+    }
+
+    [AvaloniaFact]
+    public void MainWindow_binds_formatting_toolbar_state_and_accessible_names()
+    {
+        var viewModel = new MainViewModel();
+        var window = new MainWindow { DataContext = viewModel };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var boldToggle = window.FindControl<ToggleButton>("BoldToggle");
+
+        boldToggle.ShouldNotBeNull();
+        AutomationProperties.GetName(boldToggle).ShouldBe("Bold");
+
+        viewModel.InsertText("Hello");
+        Dispatcher.UIThread.RunJobs();
+        boldToggle.IsChecked.ShouldBe(false);
+
+        viewModel.SelectAllCommand.Execute(null);
+        viewModel.ToggleBoldCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        boldToggle.IsChecked.ShouldBe(true);
 
         window.Close();
     }

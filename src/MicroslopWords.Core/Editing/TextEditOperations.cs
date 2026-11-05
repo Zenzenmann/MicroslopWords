@@ -54,6 +54,43 @@ internal static class TextEditOperations
             new TextPosition(paragraph.Id, updatedRun.Id, position.Offset + text.Length));
     }
 
+    public static (Document Document, TextPosition Caret) InsertTextWithProperties(
+        Document document,
+        TextPosition position,
+        string text,
+        RunProperties properties)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(properties);
+
+        position = TextNavigation.Normalize(document, position);
+
+        if (text.Length == 0)
+        {
+            return (document, position);
+        }
+
+        var paragraph = document.FindParagraph(position.ParagraphId)
+            ?? throw new InvalidOperationException("The insertion paragraph was not found.");
+
+        if (paragraph.Runs.Length == 0)
+        {
+            var emptyRun = new Run(Guid.NewGuid(), text, properties);
+
+            return (
+                document.ReplaceBlock(paragraph with { Runs = [emptyRun] }),
+                new TextPosition(paragraph.Id, emptyRun.Id, text.Length));
+        }
+
+        var (prefix, suffix) = SplitRuns(paragraph, position);
+        var run = new Run(Guid.NewGuid(), text, properties);
+        var runs = prefix.Add(run).AddRange(suffix);
+
+        return (
+            document.ReplaceBlock(paragraph with { Runs = runs }),
+            new TextPosition(paragraph.Id, run.Id, text.Length));
+    }
     public static (Document Document, TextPosition Caret) InsertFragment(
         Document document,
         TextPosition caret,

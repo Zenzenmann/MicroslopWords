@@ -37,11 +37,14 @@ public abstract class DocumentEditCommand : ISelectionEditCommand
 
 public sealed class InsertTextAtSelectionCommand(
     Selection selection,
-    string text) : DocumentEditCommand
+    string text,
+    RunProperties? formatting = null) : DocumentEditCommand
 {
     public Selection SelectionBefore { get; } = selection;
 
     public string Text { get; } = text;
+
+    public RunProperties? Formatting { get; } = formatting;
 
     public bool CanCoalesce =>
         SelectionBefore.IsCollapsed
@@ -66,7 +69,13 @@ public sealed class InsertTextAtSelectionCommand(
                 current.GetEnd(document));
         }
 
-        (result, caret) = TextEditOperations.InsertText(result, caret, Text);
+        (result, caret) = Formatting is null
+            ? TextEditOperations.InsertText(result, caret, Text)
+            : TextEditOperations.InsertTextWithProperties(
+                result,
+                caret,
+                Text,
+                Formatting);
         selectionAfter = Selection.Caret(caret);
 
         return result;

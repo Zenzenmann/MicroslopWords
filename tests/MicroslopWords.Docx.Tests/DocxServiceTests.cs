@@ -76,6 +76,52 @@ public sealed class DocxServiceTests
     }
 
     [Fact]
+    public void SaveAndLoad_round_trips_character_formatting()
+    {
+        var properties = new RunProperties
+        {
+            FontFamily = "Calibri",
+            FontSizePoints = 13.5,
+            Bold = true,
+            Italic = true,
+            Underline = true,
+            Strikethrough = true,
+            ColorHex = "#112233",
+            HighlightHex = "#FFFF00",
+        };
+        var paragraph = new ParagraphBlock(
+            Guid.NewGuid(),
+            ImmutableArray.Create(Run.Create("Styled", properties)));
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(paragraph));
+        var document = new Document(Guid.NewGuid(), "Formatting", ImmutableArray.Create(section));
+
+        using var stream = new MemoryStream();
+        DocxService.Save(document, stream);
+        stream.Position = 0;
+
+        var loaded = DocxService.Load(stream, "Formatting", TestContext.Current.CancellationToken);
+
+        loaded.IsSuccess.ShouldBeTrue();
+
+        var loadedProperties = loaded.Value!.Sections.Single()
+            .Blocks.OfType<ParagraphBlock>()
+            .Single()
+            .Runs.Single()
+            .EffectiveProperties;
+
+        loadedProperties.FontFamily.ShouldBe("Calibri");
+        loadedProperties.FontSizePoints.ShouldBe(13.5);
+        loadedProperties.Bold.ShouldBeTrue();
+        loadedProperties.Italic.ShouldBeTrue();
+        loadedProperties.Underline.ShouldBeTrue();
+        loadedProperties.Strikethrough.ShouldBeTrue();
+        loadedProperties.ColorHex.ShouldBe("#112233");
+        loadedProperties.HighlightHex.ShouldBe("#FFFF00");
+    }
+
+    [Fact]
     public void SaveAndLoad_round_trips_soft_line_breaks()
     {
         var paragraph = ParagraphBlock.Create("first\nsecond\n");

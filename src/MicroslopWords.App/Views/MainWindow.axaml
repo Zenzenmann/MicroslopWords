@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="using:MicroslopWords.App.Controls"
+        xmlns:automation="using:Avalonia.Automation"
         xmlns:vm="using:MicroslopWords.App.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
@@ -39,6 +40,14 @@
         <KeyBinding Gesture="Meta+C" Command="{Binding CopyCommand}" />
         <KeyBinding Gesture="Meta+V" Command="{Binding PasteCommand}" />
         <KeyBinding Gesture="Meta+A" Command="{Binding SelectAllCommand}" />
+        <KeyBinding Gesture="Ctrl+B" Command="{Binding ToggleBoldCommand}" />
+        <KeyBinding Gesture="Ctrl+I" Command="{Binding ToggleItalicCommand}" />
+        <KeyBinding Gesture="Ctrl+U" Command="{Binding ToggleUnderlineCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+X" Command="{Binding ToggleStrikethroughCommand}" />
+        <KeyBinding Gesture="Meta+B" Command="{Binding ToggleBoldCommand}" />
+        <KeyBinding Gesture="Meta+I" Command="{Binding ToggleItalicCommand}" />
+        <KeyBinding Gesture="Meta+U" Command="{Binding ToggleUnderlineCommand}" />
+        <KeyBinding Gesture="Meta+Shift+X" Command="{Binding ToggleStrikethroughCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -71,6 +80,9 @@
                 <MenuItem Header="_Bold" Command="{Binding ToggleBoldCommand}" />
                 <MenuItem Header="_Italic" Command="{Binding ToggleItalicCommand}" />
                 <MenuItem Header="_Underline" Command="{Binding ToggleUnderlineCommand}" />
+                <MenuItem Header="_Strikethrough" Command="{Binding ToggleStrikethroughCommand}" />
+                <Separator />
+                <MenuItem Header="_Clear Character Formatting" Command="{Binding ClearCharacterFormattingCommand}" />
             </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="Zoom _In" Command="{Binding ZoomInCommand}" />
@@ -92,9 +104,74 @@
                 <Button Content="Save" Command="{Binding SaveDocumentCommand}" />
                 <Button Content="Save As" Command="{Binding SaveDocumentAsCommand}" />
                 <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="6,0" />
-                <Button Content="B" FontWeight="Bold" Command="{Binding ToggleBoldCommand}" />
-                <Button Content="I" FontStyle="Italic" Command="{Binding ToggleItalicCommand}" />
-                <Button Content="U" Command="{Binding ToggleUnderlineCommand}" />
+                <StackPanel Orientation="Horizontal" Spacing="4" IsEnabled="{Binding IsEditingEnabled}">
+                    <ToggleButton x:Name="BoldToggle"
+                                  Content="B"
+                                  FontWeight="Bold"
+                                  IsThreeState="True"
+                                  IsChecked="{Binding IsBoldSelected, Mode=OneWay}"
+                                  Command="{Binding ToggleBoldCommand}"
+                                  automation:AutomationProperties.Name="Bold" />
+                    <ToggleButton x:Name="ItalicToggle"
+                                  Content="I"
+                                  FontStyle="Italic"
+                                  IsThreeState="True"
+                                  IsChecked="{Binding IsItalicSelected, Mode=OneWay}"
+                                  Command="{Binding ToggleItalicCommand}"
+                                  automation:AutomationProperties.Name="Italic" />
+                    <ToggleButton Content="U"
+                                  IsThreeState="True"
+                                  IsChecked="{Binding IsUnderlineSelected, Mode=OneWay}"
+                                  Command="{Binding ToggleUnderlineCommand}"
+                                  automation:AutomationProperties.Name="Underline" />
+                    <ToggleButton Content="S"
+                                  IsThreeState="True"
+                                  IsChecked="{Binding IsStrikethroughSelected, Mode=OneWay}"
+                                  Command="{Binding ToggleStrikethroughCommand}"
+                                  automation:AutomationProperties.Name="Strikethrough" />
+                    <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
+                    <TextBox Width="110"
+                             Text="{Binding FontFamilyInput, Mode=TwoWay}"
+                             PlaceholderText="Font family"
+                             automation:AutomationProperties.Name="Font family" />
+                    <TextBlock Text="Mixed"
+                               FontSize="11"
+                               Foreground="#666666"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding IsFontFamilyMixed}" />
+                    <Button Content="Set" Command="{Binding ApplyFontFamilyCommand}" ToolTip.Tip="Apply font family" />
+                    <TextBox Width="54"
+                             Text="{Binding FontSizeInput, Mode=TwoWay}"
+                             PlaceholderText="pt"
+                             automation:AutomationProperties.Name="Font size" />
+                    <TextBlock Text="Mixed"
+                               FontSize="11"
+                               Foreground="#666666"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding IsFontSizeMixed}" />
+                    <Button Content="Set" Command="{Binding ApplyFontSizeCommand}" ToolTip.Tip="Apply font size" />
+                    <TextBox Width="86"
+                             Text="{Binding ColorInput, Mode=TwoWay}"
+                             PlaceholderText="#RRGGBB"
+                             automation:AutomationProperties.Name="Text color" />
+                    <TextBlock Text="Mixed"
+                               FontSize="11"
+                               Foreground="#666666"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding IsColorMixed}" />
+                    <Button Content="Set" Command="{Binding ApplyColorCommand}" ToolTip.Tip="Apply text color" />
+                    <TextBox Width="86"
+                             Text="{Binding HighlightInput, Mode=TwoWay}"
+                             PlaceholderText="Highlight"
+                             automation:AutomationProperties.Name="Highlight color" />
+                    <TextBlock Text="Mixed"
+                               FontSize="11"
+                               Foreground="#666666"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding IsHighlightMixed}" />
+                    <Button Content="Set" Command="{Binding ApplyHighlightCommand}" ToolTip.Tip="Apply highlight" />
+                    <Button Content="Clear" Command="{Binding ClearCharacterFormattingCommand}" ToolTip.Tip="Clear character formatting" />
+                </StackPanel>
                 <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="6,0" />
                 <Button Content="Find" Command="{Binding FindCommand}" />
             </StackPanel>

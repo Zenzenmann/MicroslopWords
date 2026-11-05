@@ -145,6 +145,7 @@ public sealed class CommandHistory
 
         if (top.Command is not InsertTextAtSelectionCommand previousTyping
             || !previousTyping.CanCoalesce
+            || !Equals(currentTyping.Formatting, previousTyping.Formatting)
             || !PositionsEqual(
                 top.AfterSelection.Focus,
                 currentTyping.SelectionBefore.Focus)
