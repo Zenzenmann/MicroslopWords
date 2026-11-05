@@ -2,6 +2,18 @@ using System.Collections.Immutable;
 
 namespace MicroslopWords.Layout;
 
+public sealed record LineSpan(
+    int TextStart,
+    int TextLength,
+    double X,
+    double Width,
+    FontKey Font,
+    double FontSizePoints,
+    string ColorHex,
+    string? HighlightHex,
+    bool Underline,
+    bool Strikethrough);
+
 public sealed record LineLayout(
     string Text,
     int TextStart,
@@ -9,7 +21,8 @@ public sealed record LineLayout(
     LayoutRect Bounds,
     double FontSizePoints,
     ImmutableArray<GlyphCluster> Clusters,
-    FontKey ResolvedFont);
+    FontKey ResolvedFont,
+    ImmutableArray<LineSpan> Spans);
 
 public sealed record ParagraphLayout(
     Guid ParagraphId,

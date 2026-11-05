@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -7,9 +8,11 @@ using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
 using CoreDocument = MicroslopWords.Core.Documents.Document;
 using CoreRun = MicroslopWords.Core.Documents.Run;
+using CoreRunProperties = MicroslopWords.Core.Documents.RunProperties;
 using WpDocument = DocumentFormat.OpenXml.Wordprocessing.Document;
 using WpParagraph = DocumentFormat.OpenXml.Wordprocessing.Paragraph;
 using WpRun = DocumentFormat.OpenXml.Wordprocessing.Run;
+using WpRunProperties = DocumentFormat.OpenXml.Wordprocessing.RunProperties;
 using WpText = DocumentFormat.OpenXml.Wordprocessing.Text;
 
 namespace MicroslopWords.Formats.Docx;
@@ -136,6 +139,13 @@ public static class DocxService
             foreach (var run in paragraphBlock.Runs)
             {
                 var wpRun = new WpRun();
+                var wordProperties = ToWordRunProperties(run.Properties);
+
+                if (wordProperties is not null)
+                {
+                    wpRun.Append(wordProperties);
+                }
+
                 var segments = run.Text.Split('\n');
 
                 for (var index = 0; index < segments.Length; index++)
@@ -212,6 +222,157 @@ public static class DocxService
                 Bottom = (int)Math.Round(page.MarginBottomPoints * 20),
             });
 
+    private static CoreRunProperties? ToRunProperties(WpRunProperties? properties)
+    {
+        if (properties is null)
+        {
+            return null;
+        }
+
+        var fonts = properties.RunFonts;
+        var family = fonts?.Ascii?.Value
+            ?? fonts?.HighAnsi?.Value
+            ?? fonts?.ComplexScript?.Value
+            ?? fonts?.EastAsia?.Value;
+        var halfPoints = ParseHalfPoints(properties.FontSize?.Val?.Value)
+            ?? ParseHalfPoints(properties.FontSizeComplexScript?.Val?.Value);
+        var bold = properties.Bold is not null
+            && (properties.Bold.Val?.Value ?? true);
+        var italic = properties.Italic is not null
+            && (properties.Italic.Val?.Value ?? true);
+        var underline = properties.Underline is not null
+            && properties.Underline.Val?.Value != UnderlineValues.None;
+        var strikethrough = properties.Strike is not null
+            && (properties.Strike.Val?.Value ?? true);
+        var color = NormalizeHex(properties.Color?.Val?.Value);
+        var highlight = HighlightToHex(properties.Highlight?.Val?.InnerText)
+            ?? NormalizeHex(properties.Shading?.Fill?.Value);
+
+        if (family is null
+            && halfPoints is null
+            && !bold
+            && !italic
+            && !underline
+            && !strikethrough
+            && color is null
+            && highlight is null)
+        {
+            return null;
+        }
+
+        return new CoreRunProperties
+        {
+            FontFamily = string.IsNullOrWhiteSpace(family) ? "Arial" : family,
+            FontSizePoints = halfPoints is > 0 and <= 800 ? halfPoints.Value / 2 : 11,
+            Bold = bold,
+            Italic = italic,
+            Underline = underline,
+            Strikethrough = strikethrough,
+            ColorHex = color is null ? "#000000" : "#" + color,
+            HighlightHex = highlight is null ? null : "#" + highlight,
+        };
+    }
+
+    private static WpRunProperties? ToWordRunProperties(CoreRunProperties? properties)
+    {
+        if (properties is null)
+        {
+            return null;
+        }
+
+        var runProperties = new WpRunProperties(
+            new RunFonts
+            {
+                Ascii = properties.FontFamily,
+                HighAnsi = properties.FontFamily,
+            },
+            new FontSize
+            {
+                Val = ((int)Math.Round(properties.FontSizePoints * 2))
+                    .ToString(CultureInfo.InvariantCulture),
+            });
+
+        if (properties.Bold)
+        {
+            runProperties.Append(new Bold());
+        }
+
+        if (properties.Italic)
+        {
+            runProperties.Append(new Italic());
+        }
+
+        if (properties.Underline)
+        {
+            runProperties.Append(new Underline { Val = UnderlineValues.Single });
+        }
+
+        if (properties.Strikethrough)
+        {
+            runProperties.Append(new Strike());
+        }
+
+        var color = NormalizeHex(properties.ColorHex);
+
+        if (color is not null)
+        {
+            runProperties.Append(new Color { Val = color });
+        }
+
+        var highlight = NormalizeHex(properties.HighlightHex);
+
+        if (highlight is not null)
+        {
+            runProperties.Append(new Shading { Fill = highlight });
+        }
+
+        return runProperties;
+    }
+
+    private static double? ParseHalfPoints(string? value) =>
+        double.TryParse(
+            value,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var parsed)
+            ? parsed
+            : null;
+
+    private static string? NormalizeHex(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var trimmed = value.Trim().TrimStart('#').ToUpperInvariant();
+
+        return trimmed.Length == 6
+            && trimmed.All(character => Uri.IsHexDigit(character))
+                ? trimmed
+                : null;
+    }
+
+    private static string? HighlightToHex(string? value) =>
+        value?.ToLowerInvariant() switch
+        {
+            "yellow" => "#FFFF00",
+            "green" => "#00FF00",
+            "cyan" => "#00FFFF",
+            "magenta" => "#FF00FF",
+            "blue" => "#0000FF",
+            "red" => "#FF0000",
+            "darkblue" => "#000080",
+            "darkcyan" => "#008080",
+            "darkgreen" => "#008000",
+            "darkmagenta" => "#800080",
+            "darkred" => "#800000",
+            "darkyellow" => "#808000",
+            "gray" => "#808080",
+            "lightgray" => "#C0C0C0",
+            "black" => "#000000",
+            _ => null,
+        };
     private static ParagraphBlock ToParagraphBlock(
         WpParagraph paragraph,
         Action<string, string> report)
@@ -251,6 +412,7 @@ public static class DocxService
 
         foreach (var run in paragraph.Descendants<WpRun>())
         {
+            var properties = ToRunProperties(run.GetFirstChild<WpRunProperties>());
             var text = new StringBuilder();
 
             foreach (var child in run.ChildElements)
@@ -282,7 +444,7 @@ public static class DocxService
                         break;
                     case LastRenderedPageBreak:
                         break;
-                    case DocumentFormat.OpenXml.Wordprocessing.RunProperties:
+                    case WpRunProperties:
                         break;
                     default:
                         report(
@@ -294,7 +456,7 @@ public static class DocxService
 
             if (text.Length > 0)
             {
-                runs.Add(new CoreRun(Guid.NewGuid(), text.ToString()));
+                runs.Add(new CoreRun(Guid.NewGuid(), text.ToString(), properties));
             }
         }
 

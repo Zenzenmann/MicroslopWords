@@ -247,12 +247,12 @@ public sealed class DocumentPreviewControl : Control
 
             using (context.PushClip(pageRect))
             {
+                DrawSelection(context, page, pageRect, scale);
+
                 foreach (var line in page.Paragraphs.SelectMany(paragraph => paragraph.Lines))
                 {
                     DrawLine(context, line, pageRect, scale);
                 }
-
-                DrawSelection(context, page, pageRect, scale);
             }
 
             context.DrawRectangle(null, PageBorder, pageRect);
@@ -781,16 +781,127 @@ public sealed class DocumentPreviewControl : Control
             return;
         }
 
-        var formatted = CreateFormattedText(
-            line.Text,
-            line.ResolvedFont,
-            line.FontSizePoints * scale);
+        if (line.Spans.Length == 0)
+        {
+            DrawSpan(
+                context,
+                line.Text,
+                line.ResolvedFont,
+                line.FontSizePoints,
+                line.Bounds.Width,
+                "#000000",
+                null,
+                underline: false,
+                strikethrough: false,
+                pageRect,
+                line,
+                xOffset: 0,
+                scale);
+            return;
+        }
 
-        context.DrawText(
-            formatted,
-            new Point(
-                pageRect.X + (line.Bounds.X * scale),
-                pageRect.Y + (line.Bounds.Y * scale)));
+        foreach (var span in line.Spans)
+        {
+            if (span.TextLength <= 0
+                || span.TextStart < 0
+                || span.TextStart + span.TextLength > line.Text.Length)
+            {
+                continue;
+            }
+
+            DrawSpan(
+                context,
+                line.Text.Substring(span.TextStart, span.TextLength),
+                span.Font,
+                span.FontSizePoints,
+                span.Width,
+                span.ColorHex,
+                span.HighlightHex,
+                span.Underline,
+                span.Strikethrough,
+                pageRect,
+                line,
+                span.X,
+                scale);
+        }
+    }
+
+    private static void DrawSpan(
+        DrawingContext context,
+        string text,
+        FontKey font,
+        double fontSizePoints,
+        double widthPoints,
+        string colorHex,
+        string? highlightHex,
+        bool underline,
+        bool strikethrough,
+        Rect pageRect,
+        LineLayout line,
+        double xOffset,
+        double scale)
+    {
+        if (text.Length == 0)
+        {
+            return;
+        }
+
+        var x = pageRect.X + ((line.Bounds.X + xOffset) * scale);
+        var y = pageRect.Y + (line.Bounds.Y * scale);
+        var height = line.Bounds.Height * scale;
+        var brush = CreateBrush(colorHex);
+
+        if (!string.IsNullOrWhiteSpace(highlightHex))
+        {
+            context.FillRectangle(
+                CreateBrush(highlightHex),
+                new Rect(x, y, Math.Max(1, widthPoints * scale), height));
+        }
+
+        var formatted = CreateFormattedText(
+            text,
+            font,
+            fontSizePoints * scale);
+
+        context.DrawText(formatted, new Point(x, y));
+
+        var pen = new Pen(brush, Math.Max(1, scale));
+
+        if (underline)
+        {
+            context.DrawLine(
+                pen,
+                new Point(x, y + height),
+                new Point(x + formatted.Width, y + height));
+        }
+
+        if (strikethrough)
+        {
+            var middle = y + (height / 2);
+
+            context.DrawLine(
+                pen,
+                new Point(x, middle),
+                new Point(x + formatted.Width, middle));
+        }
+    }
+
+    private static IBrush CreateBrush(string? colorHex)
+    {
+        if (string.IsNullOrWhiteSpace(colorHex))
+        {
+            return TextBrush;
+        }
+
+        try
+        {
+            return new SolidColorBrush(Color.Parse(colorHex));
+        }
+        catch (Exception exception) when (
+            exception is FormatException or ArgumentException)
+        {
+            return TextBrush;
+        }
     }
 
     private void DrawSelection(

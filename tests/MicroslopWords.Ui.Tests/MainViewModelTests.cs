@@ -676,6 +676,192 @@ public sealed class MainViewModelTests
     }
 
     [Fact]
+    public void Bold_toggle_applies_to_the_selection_and_is_undoable()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello world");
+        SelectRange(viewModel, 6, 11);
+
+        viewModel.ToggleBoldCommand.Execute(null);
+
+        viewModel.IsBoldSelected.ShouldBe(true);
+        viewModel.Document.PlainText.ShouldBe("Hello world");
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Single(run => run.Text == "world")
+            .EffectiveProperties.Bold.ShouldBeTrue();
+
+        viewModel.UndoCommand.Execute(null);
+
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Single()
+            .EffectiveProperties.Bold.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Mixed_selection_reports_indeterminate_and_toggle_makes_it_consistent()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("abcdef");
+        SelectRange(viewModel, 0, 3);
+        viewModel.ToggleBoldCommand.Execute(null);
+        SelectRange(viewModel, 0, 6);
+
+        viewModel.IsBoldSelected.ShouldBeNull();
+
+        viewModel.ToggleBoldCommand.Execute(null);
+
+        viewModel.IsBoldSelected.ShouldBe(true);
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Where(run => run.Text.Length > 0)
+            .ShouldAllBe(run => run.EffectiveProperties.Bold);
+    }
+
+    [Fact]
+    public void Formatting_with_no_selection_sets_insertion_formatting()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.ToggleBoldCommand.Execute(null);
+
+        viewModel.IsBoldSelected.ShouldBe(true);
+
+        viewModel.InsertText("B");
+
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Last()
+            .EffectiveProperties.Bold.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Font_family_size_color_and_highlight_apply_to_selection()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Styled");
+        SelectRange(viewModel, 0, 6);
+
+        viewModel.FontFamilyInput = "Calibri";
+        viewModel.ApplyFontFamilyCommand.Execute(null);
+        viewModel.FontSizeInput = "24";
+        viewModel.ApplyFontSizeCommand.Execute(null);
+        viewModel.ColorInput = "#112233";
+        viewModel.ApplyColorCommand.Execute(null);
+        viewModel.HighlightInput = "#FFFF00";
+        viewModel.ApplyHighlightCommand.Execute(null);
+
+        var properties = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Single()
+            .EffectiveProperties;
+
+        properties.FontFamily.ShouldBe("Calibri");
+        properties.FontSizePoints.ShouldBe(24);
+        properties.ColorHex.ShouldBe("#112233");
+        properties.HighlightHex.ShouldBe("#FFFF00");
+        viewModel.Layout!.Pages[0].Paragraphs.Single().Lines.Single()
+            .FontSizePoints.ShouldBe(24);
+    }
+
+    [Fact]
+    public void Toggling_bold_again_removes_it_when_the_whole_selection_is_bold()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Bold");
+        SelectRange(viewModel, 0, 4);
+        viewModel.ToggleBoldCommand.Execute(null);
+
+        viewModel.ToggleBoldCommand.Execute(null);
+
+        viewModel.IsBoldSelected.ShouldBe(false);
+        viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Single()
+            .EffectiveProperties.Bold.ShouldBeFalse();
+    }
+    [Fact]
+    public void Clear_character_formatting_removes_direct_overrides()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Bold");
+        SelectRange(viewModel, 0, 4);
+        viewModel.ToggleBoldCommand.Execute(null);
+
+        viewModel.ClearCharacterFormattingCommand.Execute(null);
+
+        var run = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single()
+            .Runs
+            .Single();
+
+        run.Properties.ShouldBeNull();
+        run.EffectiveProperties.Bold.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Larger_font_size_repaginates_the_document()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText(string.Join(' ', Enumerable.Repeat("word", 1000)));
+        var before = viewModel.PageCount;
+
+        viewModel.SelectAllCommand.Execute(null);
+        viewModel.FontSizeInput = "40";
+        viewModel.ApplyFontSizeCommand.Execute(null);
+
+        viewModel.PageCount.ShouldBeGreaterThan(before);
+        viewModel.Layout!.Pages[0].Paragraphs.Single().Lines[0]
+            .FontSizePoints.ShouldBe(40);
+    }
+
+    [Fact]
+    public void Invalid_font_size_and_color_are_rejected_without_changes()
+    {
+        var viewModel = CreateViewModel();
+        viewModel.InsertText("Hello");
+        SelectRange(viewModel, 0, 5);
+        var document = viewModel.Document;
+
+        viewModel.FontSizeInput = "401";
+        viewModel.ApplyFontSizeCommand.Execute(null);
+
+        viewModel.ErrorMessage.ShouldContain("1 and 400");
+        viewModel.Document.ShouldBeSameAs(document);
+
+        viewModel.ColorInput = "not-a-color";
+        viewModel.ApplyColorCommand.Execute(null);
+
+        viewModel.ErrorMessage.ShouldContain("#RRGGBB");
+        viewModel.Document.ShouldBeSameAs(document);
+
+        viewModel.HighlightInput = "bad";
+        viewModel.ApplyHighlightCommand.Execute(null);
+
+        viewModel.ErrorMessage.ShouldContain("#RRGGBB");
+        viewModel.Document.ShouldBeSameAs(document);
+    }
+    [Fact]
     public async Task Copy_writes_the_selection_without_changing_the_document()
     {
         var clipboard = new FakeClipboardService();
@@ -875,6 +1061,17 @@ public sealed class MainViewModelTests
         viewModel.UndoCommand.Execute(null);
 
         viewModel.Document.PlainText.ShouldBeEmpty();
+    }
+    private static void SelectRange(MainViewModel viewModel, int start, int end)
+    {
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single();
+
+        viewModel.Selection = new Selection(
+            TextNavigation.FromParagraphTextOffset(paragraph, start),
+            TextNavigation.FromParagraphTextOffset(paragraph, end));
     }
     private static MainViewModel CreateViewModel(IClipboardService clipboard) =>
         new(

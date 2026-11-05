@@ -1,3 +1,4 @@
+using System.Globalization;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MicroslopWords.App.Controls;
@@ -40,6 +41,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     private bool _recoveryUnavailableNoticeShown;
     private bool _applyingFit;
     private bool _updatingSelection;
+    private RunProperties? _pendingCharacterProperties;
     private int _documentGeneration;
 
     public MainViewModel()
@@ -245,6 +247,51 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     [ObservableProperty]
     public partial ZoomFitMode ZoomMode { get; set; } = ZoomFitMode.Custom;
 
+    [ObservableProperty]
+    public partial bool? IsBoldSelected { get; set; }
+
+    [ObservableProperty]
+    public partial bool? IsItalicSelected { get; set; }
+
+    [ObservableProperty]
+    public partial bool? IsUnderlineSelected { get; set; }
+
+    [ObservableProperty]
+    public partial bool? IsStrikethroughSelected { get; set; }
+
+    [ObservableProperty]
+    public partial string? SelectedFontFamily { get; set; }
+
+    [ObservableProperty]
+    public partial double? SelectedFontSize { get; set; }
+
+    [ObservableProperty]
+    public partial string? SelectedColorHex { get; set; }
+
+    [ObservableProperty]
+    public partial string? SelectedHighlightHex { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsHighlightMixed { get; set; }
+
+    [ObservableProperty]
+    public partial string FontFamilyInput { get; set; } = "Arial";
+
+    [ObservableProperty]
+    public partial string FontSizeInput { get; set; } = "11";
+
+    [ObservableProperty]
+    public partial string ColorInput { get; set; } = "#000000";
+
+    [ObservableProperty]
+    public partial string HighlightInput { get; set; } = string.Empty;
+
+    public bool IsFontFamilyMixed => SelectedFontFamily is null;
+
+    public bool IsFontSizeMixed => SelectedFontSize is null;
+
+    public bool IsColorMixed => SelectedColorHex is null;
+
     public double ViewportWidth { get; private set; }
 
     public double ViewportHeight { get; private set; }
@@ -389,16 +436,113 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     private void CancelSave() => _saveCancellation?.Cancel();
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
-    private void ToggleBold() => StatusText = "Bold is planned for STORY-007.";
+    private void ToggleBold() => ToggleCharacterProperty(CharacterProperty.Bold);
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
-    private void ToggleItalic() => StatusText = "Italic is planned for STORY-007.";
+    private void ToggleItalic() => ToggleCharacterProperty(CharacterProperty.Italic);
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
-    private void ToggleUnderline() => StatusText = "Underline is planned for STORY-007.";
+    private void ToggleUnderline() => ToggleCharacterProperty(CharacterProperty.Underline);
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
-    private void Find() => StatusText = "Find is planned for STORY-008.";
+    private void ToggleStrikethrough() =>
+        ToggleCharacterProperty(CharacterProperty.Strikethrough);
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ClearCharacterFormatting()
+    {
+        if (_history.Selection.IsCollapsed)
+        {
+            _pendingCharacterProperties = RunProperties.Default;
+            RefreshCharacterFormattingState();
+            return;
+        }
+
+        ExecuteEdit(new FormatSelectionCommand(_history.Selection, _ => null));
+        _pendingCharacterProperties = null;
+        RefreshCharacterFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyFontFamily()
+    {
+        var family = FontFamilyInput.Trim();
+
+        if (family.Length == 0)
+        {
+            ErrorMessage = "Font family cannot be empty.";
+            return;
+        }
+
+        SetFontFamily(family);
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyFontSize()
+    {
+        if (!double.TryParse(
+            FontSizeInput,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out var size))
+        {
+            ErrorMessage = "Font size must be a number between 1 and 400 pt.";
+            return;
+        }
+
+        if (size is < 1 or > 400)
+        {
+            ErrorMessage = "Font size must be between 1 and 400 pt.";
+            return;
+        }
+
+        SetFontSize(size);
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyColor()
+    {
+        if (!TryNormalizeColor(ColorInput, out var color))
+        {
+            ErrorMessage = "Text color must use the #RRGGBB format.";
+            return;
+        }
+
+        SetColor(color);
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyHighlight()
+    {
+        if (string.IsNullOrWhiteSpace(HighlightInput))
+        {
+            SetHighlight(null);
+            return;
+        }
+
+        if (!TryNormalizeColor(HighlightInput, out var highlight))
+        {
+            ErrorMessage = "Highlight color must use the #RRGGBB format.";
+            return;
+        }
+
+        SetHighlight(highlight);
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void Find() => StatusText = "Find is planned for STORY-011.";
+
+    public void SetFontFamily(string family) =>
+        ApplyCharacterProperties(run => run with { FontFamily = family });
+
+    public void SetFontSize(double points) =>
+        ApplyCharacterProperties(run => run with { FontSizePoints = points });
+
+    public void SetColor(string colorHex) =>
+        ApplyCharacterProperties(run => run with { ColorHex = colorHex });
+
+    public void SetHighlight(string? highlightHex) =>
+        ApplyCharacterProperties(run => run with { HighlightHex = highlightHex });
 
     public bool CanUndo => _history.CanUndo;
 
@@ -566,7 +710,10 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
             return;
         }
 
-        ExecuteEdit(new InsertTextAtSelectionCommand(_history.Selection, text));
+        ExecuteEdit(new InsertTextAtSelectionCommand(
+            _history.Selection,
+            text,
+            _pendingCharacterProperties));
     }
 
     public void Backspace()
@@ -689,6 +836,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         IsModified = true;
         SyncSelectionFromHistory();
         NotifyHistoryCommands();
+        RefreshCharacterFormattingState();
     }
 
     private void SyncSelectionFromHistory()
@@ -760,6 +908,15 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     partial void OnCurrentPageChanged(int value) =>
         OnPropertyChanged(nameof(PageLabel));
 
+    partial void OnSelectedFontFamilyChanged(string? value) =>
+        OnPropertyChanged(nameof(IsFontFamilyMixed));
+
+    partial void OnSelectedFontSizeChanged(double? value) =>
+        OnPropertyChanged(nameof(IsFontSizeMixed));
+
+    partial void OnSelectedColorHexChanged(string? value) =>
+        OnPropertyChanged(nameof(IsColorMixed));
+
     partial void OnSelectionChanged(Selection value)
     {
         if (_updatingSelection)
@@ -767,7 +924,13 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
             return;
         }
 
+        var previous = _history.Selection;
         _history.SetSelection(value);
+
+        if (previous != _history.Selection || !value.IsCollapsed)
+        {
+            _pendingCharacterProperties = null;
+        }
 
         if (_history.Selection != value)
         {
@@ -775,6 +938,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         }
 
         NotifyClipboardCommands();
+        RefreshCharacterFormattingState();
     }
 
     partial void OnIsReadOnlyChanged(bool value) => NotifyEditingEnabledChanged();
@@ -804,6 +968,12 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         ToggleBoldCommand.NotifyCanExecuteChanged();
         ToggleItalicCommand.NotifyCanExecuteChanged();
         ToggleUnderlineCommand.NotifyCanExecuteChanged();
+        ToggleStrikethroughCommand.NotifyCanExecuteChanged();
+        ClearCharacterFormattingCommand.NotifyCanExecuteChanged();
+        ApplyFontFamilyCommand.NotifyCanExecuteChanged();
+        ApplyFontSizeCommand.NotifyCanExecuteChanged();
+        ApplyColorCommand.NotifyCanExecuteChanged();
+        ApplyHighlightCommand.NotifyCanExecuteChanged();
         FindCommand.NotifyCanExecuteChanged();
         NotifyClipboardCommands();
     }
@@ -1094,6 +1264,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         _recoveryWarningShown = false;
         _recoveryUnavailableNoticeShown = false;
         NotifyHistoryCommands();
+        RefreshCharacterFormattingState();
         UpdateWindowTitle();
     }
 
@@ -1211,6 +1382,264 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         {
             _applyingFit = false;
         }
+    }
+
+    private enum CharacterProperty
+    {
+        Bold,
+        Italic,
+        Underline,
+        Strikethrough,
+    }
+
+    private void ToggleCharacterProperty(CharacterProperty property)
+    {
+        var properties = GetSelectedRunProperties();
+        var current = CommonBoolean(properties.Select(run => GetProperty(run, property)));
+        var value = current != true;
+
+        ApplyCharacterProperties(run => SetProperty(run, property, value));
+    }
+
+    private void ApplyCharacterProperties(Func<RunProperties, RunProperties> transform)
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        ErrorMessage = string.Empty;
+
+        if (_history.Selection.IsCollapsed)
+        {
+            var baseProperties = _pendingCharacterProperties
+                ?? EffectivePropertiesAtCaret();
+            _pendingCharacterProperties = transform(baseProperties);
+            RefreshCharacterFormattingState();
+            return;
+        }
+
+        ExecuteEdit(new FormatSelectionCommand(_history.Selection, transform));
+        _pendingCharacterProperties = null;
+        RefreshCharacterFormattingState();
+    }
+
+    private void RefreshCharacterFormattingState()
+    {
+        var properties = GetSelectedRunProperties();
+
+        if (properties.Count == 0)
+        {
+            properties.Add(RunProperties.Default);
+        }
+
+        IsBoldSelected = CommonBoolean(properties.Select(run => run.Bold));
+        IsItalicSelected = CommonBoolean(properties.Select(run => run.Italic));
+        IsUnderlineSelected = CommonBoolean(properties.Select(run => run.Underline));
+        IsStrikethroughSelected = CommonBoolean(properties.Select(run => run.Strikethrough));
+
+        var families = properties
+            .Select(run => run.FontFamily)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        SelectedFontFamily = families.Length == 1 ? families[0] : null;
+
+        var sizes = properties
+            .Select(run => run.FontSizePoints)
+            .Distinct()
+            .ToArray();
+        SelectedFontSize = sizes.Length == 1 ? sizes[0] : null;
+
+        var colors = properties
+            .Select(run => run.ColorHex)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        SelectedColorHex = colors.Length == 1 ? colors[0] : null;
+
+        var highlights = properties
+            .Select(run => run.HighlightHex)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        SelectedHighlightHex = highlights.Length == 1 ? highlights[0] : null;
+        IsHighlightMixed = highlights.Length > 1;
+
+        if (SelectedFontFamily is not null)
+        {
+            FontFamilyInput = SelectedFontFamily;
+        }
+
+        if (SelectedFontSize is { } size)
+        {
+            FontSizeInput = size.ToString(CultureInfo.InvariantCulture);
+        }
+
+        if (SelectedColorHex is not null)
+        {
+            ColorInput = SelectedColorHex;
+        }
+
+        HighlightInput = SelectedHighlightHex ?? string.Empty;
+    }
+
+    private List<RunProperties> GetSelectedRunProperties()
+    {
+        if (Document is null)
+        {
+            return [RunProperties.Default];
+        }
+
+        if (_history.Selection.IsCollapsed)
+        {
+            return
+            [
+                _pendingCharacterProperties ?? EffectivePropertiesAtCaret()
+            ];
+        }
+
+        var selection = SelectionMap.Normalize(_history.Selection, Document);
+        var start = selection.GetStart(Document);
+        var end = selection.GetEnd(Document);
+        var paragraphs = Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToList();
+        var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
+        var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
+
+        if (startIndex < 0 || endIndex < 0)
+        {
+            return [RunProperties.Default];
+        }
+
+        var result = new List<RunProperties>();
+
+        for (var index = startIndex; index <= endIndex; index++)
+        {
+            var paragraph = paragraphs[index];
+            var selectionStart = index == startIndex
+                ? GetParagraphOffset(paragraph, start)
+                : 0;
+            var selectionEnd = index == endIndex
+                ? GetParagraphOffset(paragraph, end)
+                : paragraph.PlainText.Length;
+            var runStart = 0;
+
+            foreach (var run in paragraph.Runs)
+            {
+                var runEnd = runStart + run.Text.Length;
+
+                if (runEnd > selectionStart && runStart < selectionEnd)
+                {
+                    result.Add(run.EffectiveProperties);
+                }
+
+                runStart = runEnd;
+            }
+        }
+
+        return result;
+    }
+
+    private RunProperties EffectivePropertiesAtCaret()
+    {
+        if (Document is null)
+        {
+            return RunProperties.Default;
+        }
+
+        var selection = SelectionMap.Normalize(_history.Selection, Document);
+        var paragraph = Document.FindParagraph(selection.Focus.ParagraphId);
+
+        if (paragraph is null || paragraph.Runs.Length == 0)
+        {
+            return RunProperties.Default;
+        }
+
+        var run = paragraph.Runs
+            .FirstOrDefault(candidate => candidate.Id == selection.Focus.RunId)
+            ?? paragraph.Runs[0];
+
+        return run.EffectiveProperties;
+    }
+
+    private static int GetParagraphOffset(ParagraphBlock paragraph, TextPosition position) =>
+        TextNavigation.GetParagraphTextOffset(
+            paragraph,
+            position.RunId,
+            position.Offset);
+
+    private static int FindParagraphIndex(
+        List<ParagraphBlock> paragraphs,
+        Guid paragraphId)
+    {
+        for (var index = 0; index < paragraphs.Count; index++)
+        {
+            if (paragraphs[index].Id == paragraphId)
+            {
+                return index;
+            }
+        }
+
+        return -1;
+    }
+
+    private static bool? CommonBoolean(IEnumerable<bool> values)
+    {
+        var list = values.ToArray();
+
+        if (list.Length == 0)
+        {
+            return false;
+        }
+
+        return list.All(value => value)
+            ? true
+            : list.Any(value => value)
+                ? null
+                : false;
+    }
+
+    private static bool GetProperty(RunProperties properties, CharacterProperty property) =>
+        property switch
+        {
+            CharacterProperty.Bold => properties.Bold,
+            CharacterProperty.Italic => properties.Italic,
+            CharacterProperty.Underline => properties.Underline,
+            CharacterProperty.Strikethrough => properties.Strikethrough,
+            _ => false,
+        };
+
+    private static RunProperties SetProperty(
+        RunProperties properties,
+        CharacterProperty property,
+        bool value) =>
+        property switch
+        {
+            CharacterProperty.Bold => properties with { Bold = value },
+            CharacterProperty.Italic => properties with { Italic = value },
+            CharacterProperty.Underline => properties with { Underline = value },
+            CharacterProperty.Strikethrough => properties with { Strikethrough = value },
+            _ => properties,
+        };
+
+    private static bool TryNormalizeColor(string input, out string color)
+    {
+        var trimmed = input.Trim();
+
+        if (!trimmed.StartsWith('#'))
+        {
+            trimmed = "#" + trimmed;
+        }
+
+        if (trimmed.Length == 7
+            && trimmed[1..].All(character => Uri.IsHexDigit(character)))
+        {
+            color = trimmed.ToUpperInvariant();
+            return true;
+        }
+
+        color = string.Empty;
+        return false;
     }
 
     private void ClearMessages()

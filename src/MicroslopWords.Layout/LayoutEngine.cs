@@ -1,7 +1,6 @@
 using System.Collections.Immutable;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
-using MicroslopWords.Core.Styles;
 
 namespace MicroslopWords.Layout;
 
@@ -76,11 +75,6 @@ public sealed class LayoutEngine
 
             foreach (var paragraph in section.Blocks.OfType<ParagraphBlock>())
             {
-                var fontSize = paragraph.Runs.Length == 0
-                    ? RunProperties.Default.FontSizePoints
-                    : paragraph.Runs.Max(run => run.EffectiveProperties.FontSizePoints);
-                var lineHeight = fontSize * paragraph.EffectiveProperties.LineSpacing;
-                var request = ResolveFontRequest(paragraph);
                 var spaceBefore = paragraph.EffectiveProperties.SpaceBeforePoints;
                 cursorY += spaceBefore;
 
@@ -95,11 +89,15 @@ public sealed class LayoutEngine
                     }
 
                     var paragraphTop = paragraphLines[0].Bounds.Y;
-                    var paragraphHeight = Math.Max(lineHeight, paragraphLines.Count * lineHeight);
+                    var paragraphBottom = paragraphLines[^1].Bounds.Bottom;
 
                     paragraphs.Add(new ParagraphLayout(
                         paragraph.Id,
-                        new LayoutRect(activePage.MarginLeftPoints, paragraphTop, maxLineWidth, paragraphHeight),
+                        new LayoutRect(
+                            activePage.MarginLeftPoints,
+                            paragraphTop,
+                            maxLineWidth,
+                            paragraphBottom - paragraphTop),
                         paragraphLines.ToImmutable()));
 
                     paragraphLines.Clear();
@@ -107,22 +105,35 @@ public sealed class LayoutEngine
                 }
 
                 var segments = SplitSoftBreakSegments(paragraph.PlainText);
+                var defaultProperties = paragraph.Runs.Length == 0
+                    ? RunProperties.Default
+                    : paragraph.Runs[0].EffectiveProperties;
+                var defaultFont = ResolveFontRequest(defaultProperties);
 
                 for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
                 {
                     var segment = segments[segmentIndex];
-                    var shaped = shaper.Shape(segment.Text, request, fontSize);
-
-                    foreach (var diagnostic in shaped.Diagnostics)
-                    {
-                        diagnostics.Add(diagnostic);
-                    }
-
-                    var lines = WrapShapedText(shaped, segment.Start, contentWidth);
+                    var shaped = ShapeSegment(
+                        paragraph,
+                        segment.Start,
+                        segment.Text.Length,
+                        shaper,
+                        diagnostics,
+                        defaultFont,
+                        defaultProperties.FontSizePoints);
+                    var lines = WrapStyledText(
+                        segment.Text,
+                        segment.Start,
+                        shaped.Clusters,
+                        contentWidth,
+                        shaped.DefaultFont,
+                        shaped.DefaultFontSize);
 
                     for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
                     {
                         var line = lines[lineIndex];
+                        var lineHeight = line.FontSizePoints
+                            * paragraph.EffectiveProperties.LineSpacing;
 
                         if (cursorY + lineHeight > pageBottom
                             && (paragraphs.Count > 0 || paragraphLines.Count > 0))
@@ -136,10 +147,15 @@ public sealed class LayoutEngine
                             line.Text,
                             line.TextStart,
                             segmentIndex > 0 && lineIndex == 0,
-                            new LayoutRect(activePage.MarginLeftPoints, cursorY, line.AdvanceWidthPoints, lineHeight),
-                            fontSize,
+                            new LayoutRect(
+                                activePage.MarginLeftPoints,
+                                cursorY,
+                                line.AdvanceWidthPoints,
+                                lineHeight),
+                            line.FontSizePoints,
                             line.Clusters,
-                            shaped.ResolvedFont));
+                            line.ResolvedFont,
+                            line.Spans));
                         cursorY += lineHeight;
                     }
                 }
@@ -175,52 +191,89 @@ public sealed class LayoutEngine
             Deduplicate(diagnostics));
     }
 
-    private static FontKey ResolveFontRequest(ParagraphBlock paragraph)
+    private static ShapedSegment ShapeSegment(
+        ParagraphBlock paragraph,
+        int segmentStart,
+        int segmentLength,
+        TextShaper shaper,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        FontKey defaultFont,
+        double defaultFontSize)
     {
-        var properties = paragraph.Runs.Length > 0
-            ? paragraph.Runs[0].EffectiveProperties
-            : RunProperties.Default;
+        var segmentEnd = segmentStart + segmentLength;
+        var clusters = ImmutableArray.CreateBuilder<StyledCluster>();
+        var runOffset = 0;
 
-        return new FontKey(
-            properties.FontFamily,
-            properties.Bold ? FontWeight.Bold : FontWeight.Regular,
-            properties.Italic ? FontSlant.Italic : FontSlant.Upright);
+        foreach (var run in paragraph.Runs)
+        {
+            var runStart = runOffset;
+            var runEnd = runStart + run.Text.Length;
+            runOffset = runEnd;
+
+            var from = Math.Max(segmentStart, runStart);
+            var to = Math.Min(segmentEnd, runEnd);
+
+            if (to <= from)
+            {
+                continue;
+            }
+
+            var properties = run.EffectiveProperties;
+            var font = ResolveFontRequest(properties);
+            var text = run.Text[(from - runStart)..(to - runStart)];
+            var shaped = shaper.Shape(text, font, properties.FontSizePoints);
+
+            foreach (var diagnostic in shaped.Diagnostics)
+            {
+                diagnostics.Add(diagnostic);
+            }
+
+            var displayFont = new FontKey(
+                shaped.ResolvedFont.Family,
+                font.Weight,
+                font.Slant);
+
+            foreach (var cluster in shaped.Clusters)
+            {
+                clusters.Add(new StyledCluster(
+                    from + cluster.TextStart,
+                    cluster.TextLength,
+                    cluster.Advance,
+                    displayFont,
+                    properties));
+            }
+        }
+
+        return new ShapedSegment(
+            clusters.ToImmutable(),
+            defaultFont,
+            defaultFontSize);
     }
 
-    private static ImmutableArray<ShapedLine> WrapShapedText(
-        ShapedText shaped,
-        int paragraphStart,
-        double maxWidth)
+    private static ImmutableArray<StyledLine> WrapStyledText(
+        string segmentText,
+        int segmentStart,
+        ImmutableArray<StyledCluster> clusters,
+        double maxWidth,
+        FontKey defaultFont,
+        double defaultFontSize)
     {
-        if (shaped.Text.Length == 0)
+        if (segmentText.Length == 0 || clusters.Length == 0)
         {
             return
             [
-                new ShapedLine(
+                new StyledLine(
                     string.Empty,
-                    paragraphStart,
+                    segmentStart,
                     0,
-                    shaped.ResolvedFont,
-                    ImmutableArray<GlyphCluster>.Empty),
+                    defaultFontSize,
+                    defaultFont,
+                    ImmutableArray<GlyphCluster>.Empty,
+                    ImmutableArray<LineSpan>.Empty),
             ];
         }
 
-        var clusters = shaped.Clusters;
-
-        if (clusters.Length == 0)
-        {
-            return
-            [
-                new ShapedLine(
-                    shaped.Text,
-                    paragraphStart,
-                    0,
-                    shaped.ResolvedFont,
-                    ImmutableArray<GlyphCluster>.Empty),
-            ];
-        }
-
-        var lines = ImmutableArray.CreateBuilder<ShapedLine>();
+        var lines = ImmutableArray.CreateBuilder<StyledLine>();
         var lineStartCluster = 0;
         var currentWidth = 0d;
         var lastBreak = -1;
@@ -229,7 +282,7 @@ public sealed class LayoutEngine
         {
             currentWidth += clusters[index].Advance;
 
-            if (IsBreakOpportunity(shaped.Text, clusters[index]))
+            if (IsBreakOpportunity(segmentText, segmentStart, clusters[index]))
             {
                 lastBreak = index;
             }
@@ -240,7 +293,12 @@ public sealed class LayoutEngine
             }
 
             var breakAt = lastBreak >= lineStartCluster ? lastBreak : index - 1;
-            lines.Add(CommitLine(shaped, paragraphStart, lineStartCluster, breakAt));
+            lines.Add(CommitLine(
+                segmentText,
+                segmentStart,
+                clusters,
+                lineStartCluster,
+                breakAt));
 
             lineStartCluster = breakAt + 1;
             currentWidth = 0;
@@ -250,7 +308,7 @@ public sealed class LayoutEngine
             {
                 currentWidth += clusters[replay].Advance;
 
-                if (IsBreakOpportunity(shaped.Text, clusters[replay]))
+                if (IsBreakOpportunity(segmentText, segmentStart, clusters[replay]))
                 {
                     lastBreak = replay;
                 }
@@ -258,51 +316,111 @@ public sealed class LayoutEngine
         }
 
         lines.Add(CommitLine(
-            shaped,
-            paragraphStart,
+            segmentText,
+            segmentStart,
+            clusters,
             lineStartCluster,
             clusters.Length - 1));
 
         return lines.ToImmutable();
     }
 
-    private static ShapedLine CommitLine(
-        ShapedText shaped,
-        int paragraphStart,
+    private static StyledLine CommitLine(
+        string segmentText,
+        int segmentStart,
+        ImmutableArray<StyledCluster> clusters,
         int startCluster,
         int endCluster)
     {
-        var clusters = shaped.Clusters;
         var first = clusters[startCluster];
         var last = clusters[endCluster];
-        var textStart = first.TextStart;
-        var textLength = (last.TextStart + last.TextLength) - textStart;
+        var lineStart = first.TextStart;
+        var lineEnd = last.TextStart + last.TextLength;
         var width = 0d;
-        var built = ImmutableArray.CreateBuilder<GlyphCluster>(
+        var maxFontSize = 0d;
+        var builtClusters = ImmutableArray.CreateBuilder<GlyphCluster>(
             endCluster - startCluster + 1);
+        var spans = ImmutableArray.CreateBuilder<LineSpan>();
+        var spanStartCluster = startCluster;
+        var spanX = 0d;
 
         for (var index = startCluster; index <= endCluster; index++)
         {
-            var cluster = clusters[index];
-            width += cluster.Advance;
-            built.Add(new GlyphCluster(
-                cluster.TextStart + paragraphStart,
-                cluster.TextLength,
-                cluster.Advance));
+            width += clusters[index].Advance;
+            maxFontSize = Math.Max(maxFontSize, clusters[index].Properties.FontSizePoints);
+            builtClusters.Add(new GlyphCluster(
+                clusters[index].TextStart,
+                clusters[index].TextLength,
+                clusters[index].Advance));
         }
 
-        return new ShapedLine(
-            shaped.Text.Substring(textStart, textLength),
-            paragraphStart + textStart,
+        while (spanStartCluster <= endCluster)
+        {
+            var spanEndCluster = spanStartCluster;
+            var spanWidth = clusters[spanStartCluster].Advance;
+
+            while (spanEndCluster + 1 <= endCluster
+                && SameStyle(clusters[spanEndCluster], clusters[spanEndCluster + 1]))
+            {
+                spanEndCluster++;
+                spanWidth += clusters[spanEndCluster].Advance;
+            }
+
+            var spanStart = clusters[spanStartCluster].TextStart;
+            var spanEnd = clusters[spanEndCluster].TextStart
+                + clusters[spanEndCluster].TextLength;
+            var properties = clusters[spanStartCluster].Properties;
+            spans.Add(new LineSpan(
+                spanStart - lineStart,
+                spanEnd - spanStart,
+                spanX,
+                spanWidth,
+                clusters[spanStartCluster].Font,
+                properties.FontSizePoints,
+                properties.ColorHex,
+                properties.HighlightHex,
+                properties.Underline,
+                properties.Strikethrough));
+
+            spanX += spanWidth;
+            spanStartCluster = spanEndCluster + 1;
+        }
+
+        return new StyledLine(
+            segmentText.Substring(lineStart - segmentStart, lineEnd - lineStart),
+            lineStart,
             width,
-            shaped.ResolvedFont,
-            built.ToImmutable());
+            maxFontSize <= 0 ? clusters[startCluster].Properties.FontSizePoints : maxFontSize,
+            clusters[startCluster].Font,
+            builtClusters.ToImmutable(),
+            spans.ToImmutable());
     }
 
-    private static bool IsBreakOpportunity(string text, GlyphCluster cluster) =>
-        cluster.TextStart >= 0
-        && cluster.TextStart < text.Length
-        && char.IsWhiteSpace(text[cluster.TextStart]);
+    private static bool IsBreakOpportunity(
+        string segmentText,
+        int segmentStart,
+        StyledCluster cluster)
+    {
+        var index = cluster.TextStart - segmentStart;
+
+        return index >= 0
+            && index < segmentText.Length
+            && char.IsWhiteSpace(segmentText[index]);
+    }
+
+    private static bool SameStyle(StyledCluster left, StyledCluster right) =>
+        left.Font == right.Font
+        && left.Properties.FontSizePoints == right.Properties.FontSizePoints
+        && string.Equals(left.Properties.ColorHex, right.Properties.ColorHex, StringComparison.Ordinal)
+        && string.Equals(left.Properties.HighlightHex, right.Properties.HighlightHex, StringComparison.Ordinal)
+        && left.Properties.Underline == right.Properties.Underline
+        && left.Properties.Strikethrough == right.Properties.Strikethrough;
+
+    private static FontKey ResolveFontRequest(RunProperties properties) =>
+        new(
+            properties.FontFamily,
+            properties.Bold ? FontWeight.Bold : FontWeight.Regular,
+            properties.Italic ? FontSlant.Italic : FontSlant.Upright);
 
     private static ImmutableArray<(int Start, string Text)> SplitSoftBreakSegments(
         string text)
@@ -325,6 +443,7 @@ public sealed class LayoutEngine
 
         return segments.ToImmutable();
     }
+
     private static ImmutableArray<Diagnostic> Deduplicate(
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
@@ -342,10 +461,24 @@ public sealed class LayoutEngine
         return result.ToImmutable();
     }
 
-    private readonly record struct ShapedLine(
+    private readonly record struct StyledCluster(
+        int TextStart,
+        int TextLength,
+        double Advance,
+        FontKey Font,
+        RunProperties Properties);
+
+    private readonly record struct ShapedSegment(
+        ImmutableArray<StyledCluster> Clusters,
+        FontKey DefaultFont,
+        double DefaultFontSize);
+
+    private readonly record struct StyledLine(
         string Text,
         int TextStart,
         double AdvanceWidthPoints,
+        double FontSizePoints,
         FontKey ResolvedFont,
-        ImmutableArray<GlyphCluster> Clusters);
+        ImmutableArray<GlyphCluster> Clusters,
+        ImmutableArray<LineSpan> Spans);
 }
