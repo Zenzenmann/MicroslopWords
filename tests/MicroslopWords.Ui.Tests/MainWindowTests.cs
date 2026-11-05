@@ -85,4 +85,31 @@ public sealed class MainWindowTests
 
         window.Close();
     }
+
+    [AvaloniaFact]
+    public void MainWindow_binds_paragraph_toolbar_state_and_accessible_names()
+    {
+        var viewModel = new MainViewModel();
+        var window = new MainWindow { DataContext = viewModel };
+
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        var bulletToggle = window.FindControl<ToggleButton>("BulletedListToggle");
+        var pageBreak = window.FindControl<Button>("PageBreakButton");
+
+        bulletToggle.ShouldNotBeNull();
+        pageBreak.ShouldNotBeNull();
+        AutomationProperties.GetName(bulletToggle).ShouldBe("Bulleted list");
+        AutomationProperties.GetName(pageBreak).ShouldBe("Insert page break");
+
+        viewModel.InsertText("Item");
+        viewModel.SelectAllCommand.Execute(null);
+        viewModel.ToggleBulletedListCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        bulletToggle.IsChecked.ShouldBe(true);
+
+        window.Close();
+    }
 }

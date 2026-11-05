@@ -27,7 +27,15 @@ public sealed record LineLayout(
 public sealed record ParagraphLayout(
     Guid ParagraphId,
     LayoutRect Bounds,
-    ImmutableArray<LineLayout> Lines);
+    ImmutableArray<LineLayout> Lines,
+    string? ListLabel = null,
+    double ListLabelX = 0);
+
+public sealed record PageBreakLayout(
+    int PageNumber,
+    double Y,
+    Guid ParagraphId,
+    int TextOffset);
 
 public sealed record PageLayout(
     int PageNumber,
@@ -38,6 +46,7 @@ public sealed record DocumentLayout(
     ImmutableArray<PageLayout> Pages,
     double PageWidthPoints,
     double PageHeightPoints,
+    ImmutableArray<PageBreakLayout> PageBreaks,
     ImmutableArray<Core.Diagnostics.Diagnostic> Diagnostics);
 
 public sealed record CaretLayout(

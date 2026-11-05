@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
 
@@ -6,6 +7,21 @@ namespace MicroslopWords.Layout;
 
 public sealed class LayoutEngine
 {
+    private const double ListIndentPoints = 18;
+
+    private static readonly string[] BulletSymbols =
+    [
+        "\u2022",
+        "\u25E6",
+        "\u25AA",
+        "\u2013",
+        "\u00B7",
+        "\u25CB",
+        "\u25A0",
+        "\u25B8",
+        "\u2023",
+    ];
+
     private readonly FontCatalog _fontCatalog;
 
     public LayoutEngine(FontCatalog? fontCatalog = null)
@@ -33,6 +49,8 @@ public sealed class LayoutEngine
         var pageBottom = activePage.MarginTopPoints + contentHeight;
 
         using var shaper = new TextShaper(catalog);
+        var listLabels = BuildListLabels(document);
+        var pageBreaks = ImmutableArray.CreateBuilder<PageBreakLayout>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
         var pages = ImmutableArray.CreateBuilder<PageLayout>();
         var paragraphs = ImmutableArray.CreateBuilder<ParagraphLayout>();
@@ -75,8 +93,29 @@ public sealed class LayoutEngine
 
             foreach (var paragraph in section.Blocks.OfType<ParagraphBlock>())
             {
-                var spaceBefore = paragraph.EffectiveProperties.SpaceBeforePoints;
-                cursorY += spaceBefore;
+                var properties = paragraph.EffectiveProperties;
+                var isList = properties.ListKind != ListKind.None;
+                var listLevel = Math.Clamp(properties.ListLevel, 1, 9);
+                var listLabel = isList && listLabels.TryGetValue(paragraph.Id, out var label)
+                    ? label
+                    : null;
+                var baseLeft = activePage.MarginLeftPoints
+                    + properties.LeftIndentPoints
+                    + (isList ? (listLevel - 1) * ListIndentPoints : 0);
+                var textLeft = baseLeft + (isList ? ListIndentPoints : 0);
+                var wrapWidth = Math.Max(
+                    1,
+                    contentWidth
+                        - properties.LeftIndentPoints
+                        - properties.RightIndentPoints
+                        - (isList
+                            ? ListIndentPoints + ((listLevel - 1) * ListIndentPoints)
+                            : 0)
+                        - (isList ? 0 : Math.Max(0, properties.FirstLineIndentPoints)));
+                var firstLineExtra = isList ? 0 : properties.FirstLineIndentPoints;
+                var listLabelShown = false;
+
+                cursorY += properties.SpaceBeforePoints;
 
                 var paragraphLines = ImmutableArray.CreateBuilder<LineLayout>();
                 var maxLineWidth = 0d;
@@ -90,25 +129,30 @@ public sealed class LayoutEngine
 
                     var paragraphTop = paragraphLines[0].Bounds.Y;
                     var paragraphBottom = paragraphLines[^1].Bounds.Bottom;
+                    var shownLabel = listLabelShown ? null : listLabel;
 
                     paragraphs.Add(new ParagraphLayout(
                         paragraph.Id,
                         new LayoutRect(
-                            activePage.MarginLeftPoints,
+                            baseLeft,
                             paragraphTop,
                             maxLineWidth,
                             paragraphBottom - paragraphTop),
-                        paragraphLines.ToImmutable()));
+                        paragraphLines.ToImmutable(),
+                        shownLabel,
+                        baseLeft));
 
+                    listLabelShown = true;
                     paragraphLines.Clear();
                     maxLineWidth = 0;
                 }
 
-                var segments = SplitSoftBreakSegments(paragraph.PlainText);
+                var segments = SplitTextSegments(paragraph.PlainText);
                 var defaultProperties = paragraph.Runs.Length == 0
                     ? RunProperties.Default
                     : paragraph.Runs[0].EffectiveProperties;
                 var defaultFont = ResolveFontRequest(defaultProperties);
+                var afterSoftBreak = false;
 
                 for (var segmentIndex = 0; segmentIndex < segments.Length; segmentIndex++)
                 {
@@ -125,15 +169,15 @@ public sealed class LayoutEngine
                         segment.Text,
                         segment.Start,
                         shaped.Clusters,
-                        contentWidth,
+                        wrapWidth,
                         shaped.DefaultFont,
-                        shaped.DefaultFontSize);
+                        shaped.DefaultFontSize,
+                        properties.Alignment == ParagraphAlignment.Justify);
 
                     for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
                     {
                         var line = lines[lineIndex];
-                        var lineHeight = line.FontSizePoints
-                            * paragraph.EffectiveProperties.LineSpacing;
+                        var lineHeight = line.FontSizePoints * properties.LineSpacing;
 
                         if (cursorY + lineHeight > pageBottom
                             && (paragraphs.Count > 0 || paragraphLines.Count > 0))
@@ -142,13 +186,34 @@ public sealed class LayoutEngine
                             FlushPage();
                         }
 
-                        maxLineWidth = Math.Max(maxLineWidth, line.AdvanceWidthPoints);
+                        var lineX = textLeft;
+
+                        if (!isList && lineIndex == 0)
+                        {
+                            lineX += firstLineExtra;
+                        }
+
+                        switch (properties.Alignment)
+                        {
+                            case ParagraphAlignment.Center:
+                                lineX += (wrapWidth - line.AdvanceWidthPoints) / 2;
+                                break;
+                            case ParagraphAlignment.Right:
+                                lineX += wrapWidth - line.AdvanceWidthPoints;
+                                break;
+                        }
+
+                        lineX = Math.Max(activePage.MarginLeftPoints, lineX);
+                        maxLineWidth = Math.Max(
+                            maxLineWidth,
+                            (lineX - baseLeft) + line.AdvanceWidthPoints);
+
                         paragraphLines.Add(new LineLayout(
                             line.Text,
                             line.TextStart,
-                            segmentIndex > 0 && lineIndex == 0,
+                            afterSoftBreak && lineIndex == 0,
                             new LayoutRect(
-                                activePage.MarginLeftPoints,
+                                lineX,
                                 cursorY,
                                 line.AdvanceWidthPoints,
                                 lineHeight),
@@ -158,10 +223,35 @@ public sealed class LayoutEngine
                             line.Spans));
                         cursorY += lineHeight;
                     }
+
+                    if (segment.BreakAfter == TextBreakKind.Page)
+                    {
+                        pageBreaks.Add(new PageBreakLayout(
+                            pageNumber,
+                            cursorY,
+                            paragraph.Id,
+                            segment.Start + segment.Text.Length));
+                        FinishParagraphSegment();
+
+                        if (paragraphs.Count > 0)
+                        {
+                            FlushPage();
+                        }
+
+                        afterSoftBreak = false;
+                    }
+                    else if (segment.BreakAfter == TextBreakKind.Soft)
+                    {
+                        afterSoftBreak = true;
+                    }
+                    else
+                    {
+                        afterSoftBreak = false;
+                    }
                 }
 
                 FinishParagraphSegment();
-                cursorY += paragraph.EffectiveProperties.SpaceAfterPoints;
+                cursorY += properties.SpaceAfterPoints;
             }
         }
 
@@ -188,6 +278,7 @@ public sealed class LayoutEngine
             pages.ToImmutable(),
             defaultPage.EffectiveWidthPoints,
             defaultPage.EffectiveHeightPoints,
+            pageBreaks.ToImmutable(),
             Deduplicate(diagnostics));
     }
 
@@ -256,7 +347,8 @@ public sealed class LayoutEngine
         ImmutableArray<StyledCluster> clusters,
         double maxWidth,
         FontKey defaultFont,
-        double defaultFontSize)
+        double defaultFontSize,
+        bool justify)
     {
         if (segmentText.Length == 0 || clusters.Length == 0)
         {
@@ -298,7 +390,9 @@ public sealed class LayoutEngine
                 segmentStart,
                 clusters,
                 lineStartCluster,
-                breakAt));
+                breakAt,
+                maxWidth,
+                justify));
 
             lineStartCluster = breakAt + 1;
             currentWidth = 0;
@@ -320,7 +414,9 @@ public sealed class LayoutEngine
             segmentStart,
             clusters,
             lineStartCluster,
-            clusters.Length - 1));
+            clusters.Length - 1,
+            maxWidth,
+            false));
 
         return lines.ToImmutable();
     }
@@ -330,40 +426,79 @@ public sealed class LayoutEngine
         int segmentStart,
         ImmutableArray<StyledCluster> clusters,
         int startCluster,
-        int endCluster)
+        int endCluster,
+        double maxWidth,
+        bool justify)
     {
         var first = clusters[startCluster];
         var last = clusters[endCluster];
         var lineStart = first.TextStart;
         var lineEnd = last.TextStart + last.TextLength;
+        var count = endCluster - startCluster + 1;
+        var advances = new double[count];
         var width = 0d;
         var maxFontSize = 0d;
-        var builtClusters = ImmutableArray.CreateBuilder<GlyphCluster>(
-            endCluster - startCluster + 1);
+
+        for (var index = 0; index < count; index++)
+        {
+            advances[index] = clusters[startCluster + index].Advance;
+            width += advances[index];
+            maxFontSize = Math.Max(
+                maxFontSize,
+                clusters[startCluster + index].Properties.FontSizePoints);
+        }
+
+        if (justify && width < maxWidth)
+        {
+            var spaces = 0;
+
+            for (var index = startCluster; index <= endCluster; index++)
+            {
+                if (IsWhitespaceAt(segmentText, segmentStart, clusters[index]))
+                {
+                    spaces++;
+                }
+            }
+
+            if (spaces > 0)
+            {
+                var extra = (maxWidth - width) / spaces;
+
+                for (var index = startCluster; index <= endCluster; index++)
+                {
+                    if (IsWhitespaceAt(segmentText, segmentStart, clusters[index]))
+                    {
+                        advances[index - startCluster] += extra;
+                    }
+                }
+
+                width = maxWidth;
+            }
+        }
+
+        var builtClusters = ImmutableArray.CreateBuilder<GlyphCluster>(count);
         var spans = ImmutableArray.CreateBuilder<LineSpan>();
         var spanStartCluster = startCluster;
         var spanX = 0d;
 
         for (var index = startCluster; index <= endCluster; index++)
         {
-            width += clusters[index].Advance;
-            maxFontSize = Math.Max(maxFontSize, clusters[index].Properties.FontSizePoints);
             builtClusters.Add(new GlyphCluster(
                 clusters[index].TextStart,
                 clusters[index].TextLength,
-                clusters[index].Advance));
+                advances[index - startCluster]));
         }
 
         while (spanStartCluster <= endCluster)
         {
             var spanEndCluster = spanStartCluster;
-            var spanWidth = clusters[spanStartCluster].Advance;
+            var spanWidth = advances[spanStartCluster - startCluster];
 
             while (spanEndCluster + 1 <= endCluster
                 && SameStyle(clusters[spanEndCluster], clusters[spanEndCluster + 1]))
             {
                 spanEndCluster++;
-                spanWidth += clusters[spanEndCluster].Advance;
+                spanWidth += advances[spanEndCluster - startCluster];
             }
 
             var spanStart = clusters[spanStartCluster].TextStart;
@@ -395,8 +530,7 @@ public sealed class LayoutEngine
             builtClusters.ToImmutable(),
             spans.ToImmutable());
     }
-
-    private static bool IsBreakOpportunity(
+    private static bool IsWhitespaceAt(
         string segmentText,
         int segmentStart,
         StyledCluster cluster)
@@ -407,6 +541,12 @@ public sealed class LayoutEngine
             && index < segmentText.Length
             && char.IsWhiteSpace(segmentText[index]);
     }
+
+    private static bool IsBreakOpportunity(
+        string segmentText,
+        int segmentStart,
+        StyledCluster cluster) =>
+        IsWhitespaceAt(segmentText, segmentStart, cluster);
 
     private static bool SameStyle(StyledCluster left, StyledCluster right) =>
         left.Font == right.Font
@@ -422,28 +562,85 @@ public sealed class LayoutEngine
             properties.Bold ? FontWeight.Bold : FontWeight.Regular,
             properties.Italic ? FontSlant.Italic : FontSlant.Upright);
 
-    private static ImmutableArray<(int Start, string Text)> SplitSoftBreakSegments(
-        string text)
+    private static Dictionary<Guid, string> BuildListLabels(Document document)
     {
-        var segments = ImmutableArray.CreateBuilder<(int Start, string Text)>();
-        var start = 0;
+        var labels = new Dictionary<Guid, string>();
+        var counters = new Dictionary<Guid, Dictionary<int, int>>();
 
-        for (var index = 0; index < text.Length; index++)
+        foreach (var paragraph in document.Sections
+                     .SelectMany(section => section.Blocks)
+                     .OfType<ParagraphBlock>())
         {
-            if (text[index] != '\n')
+            var properties = paragraph.EffectiveProperties;
+
+            if (properties.ListKind == ListKind.None)
             {
                 continue;
             }
 
-            segments.Add((start, text[start..index]));
+            var level = Math.Clamp(properties.ListLevel, 1, 9);
+
+            if (properties.ListKind == ListKind.Bulleted)
+            {
+                labels[paragraph.Id] = BulletSymbols[level - 1];
+                continue;
+            }
+
+            var listId = properties.ListId ?? paragraph.Id;
+
+            if (!counters.TryGetValue(listId, out var levels))
+            {
+                levels = [];
+                counters[listId] = levels;
+            }
+
+            levels.TryGetValue(level, out var current);
+            current++;
+            levels[level] = current;
+
+            foreach (var deeper in levels.Keys.Where(key => key > level).ToArray())
+            {
+                levels.Remove(deeper);
+            }
+
+            labels[paragraph.Id] = current.ToString(CultureInfo.InvariantCulture) + ".";
+        }
+
+        return labels;
+    }
+
+    private static ImmutableArray<TextSegment> SplitTextSegments(string text)
+    {
+        var segments = ImmutableArray.CreateBuilder<TextSegment>();
+        var start = 0;
+
+        for (var index = 0; index < text.Length; index++)
+        {
+            var kind = text[index] switch
+            {
+                TextBreaks.SoftBreak => TextBreakKind.Soft,
+                TextBreaks.PageBreak => TextBreakKind.Page,
+                _ => TextBreakKind.None,
+            };
+
+            if (kind == TextBreakKind.None)
+            {
+                continue;
+            }
+
+            segments.Add(new TextSegment(start, text[start..index], kind));
             start = index + 1;
         }
 
-        segments.Add((start, text[start..]));
+        if (start < text.Length
+            || segments.Count == 0
+            || segments[^1].BreakAfter != TextBreakKind.Page)
+        {
+            segments.Add(new TextSegment(start, text[start..], TextBreakKind.None));
+        }
 
         return segments.ToImmutable();
     }
-
     private static ImmutableArray<Diagnostic> Deduplicate(
         ImmutableArray<Diagnostic>.Builder diagnostics)
     {
@@ -460,6 +657,18 @@ public sealed class LayoutEngine
 
         return result.ToImmutable();
     }
+
+    private enum TextBreakKind
+    {
+        None,
+        Soft,
+        Page,
+    }
+
+    private readonly record struct TextSegment(
+        int Start,
+        string Text,
+        TextBreakKind BreakAfter);
 
     private readonly record struct StyledCluster(
         int TextStart,

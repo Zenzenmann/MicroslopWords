@@ -65,6 +65,12 @@ public sealed class DocumentPreviewControl : Control
     private static readonly Pen CompositionUnderline =
         new(new SolidColorBrush(Color.Parse("#1B1F24")), 1);
 
+    private static readonly Pen PageBreakPen =
+        new(new SolidColorBrush(Color.Parse("#B26B00")), 1.5);
+
+    private static readonly IBrush PageBreakBrush =
+        new SolidColorBrush(Color.Parse("#B26B00"));
+
     private readonly DocumentTextInputMethodClient _imeClient;
     private ScrollViewer? _scrollViewer;
     private Vector? _pendingScrollOffset;
@@ -248,11 +254,14 @@ public sealed class DocumentPreviewControl : Control
             using (context.PushClip(pageRect))
             {
                 DrawSelection(context, page, pageRect, scale);
+                DrawListLabels(context, page, pageRect, scale);
 
                 foreach (var line in page.Paragraphs.SelectMany(paragraph => paragraph.Lines))
                 {
                     DrawLine(context, line, pageRect, scale);
                 }
+
+                DrawPageBreaks(context, layout, page, pageRect, scale);
             }
 
             context.DrawRectangle(null, PageBorder, pageRect);
@@ -396,6 +405,24 @@ public sealed class DocumentPreviewControl : Control
         }
 
         var scale = PageViewport.PageScale(Zoom);
+        var pageBreak = Layout.PageBreaks.FirstOrDefault(candidate =>
+            candidate.PageNumber == page.PageNumber
+            && Math.Abs(contentPoint.Y - (pageRect.Y + (candidate.Y * scale))) <= 6);
+
+        if (pageBreak is not null)
+        {
+            var breakParagraph = Document.FindParagraph(pageBreak.ParagraphId);
+
+            if (breakParagraph is not null)
+            {
+                position = TextNavigation.FromParagraphTextOffset(
+                    breakParagraph,
+                    pageBreak.TextOffset);
+
+                return true;
+            }
+        }
+
         var pageX = ((contentPoint.X - pageRect.X) / scale) + page.Bounds.X;
         var pageY = ((contentPoint.Y - pageRect.Y) / scale) + page.Bounds.Y;
         var hit = LayoutHitTesting.HitTestLine(Layout, page.PageNumber, pageX, pageY);
@@ -768,6 +795,97 @@ public sealed class DocumentPreviewControl : Control
                 paragraph,
                 position.RunId,
                 position.Offset);
+    }
+
+    private static void DrawListLabels(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        foreach (var paragraph in page.Paragraphs)
+        {
+            if (string.IsNullOrEmpty(paragraph.ListLabel)
+                || paragraph.Lines.Length == 0)
+            {
+                continue;
+            }
+
+            var line = paragraph.Lines[0];
+            var span = line.Spans.FirstOrDefault();
+            var font = span?.Font ?? line.ResolvedFont;
+            var fontSize = span?.FontSizePoints ?? line.FontSizePoints;
+            var formatted = CreateFormattedText(
+                paragraph.ListLabel,
+                font,
+                fontSize * scale);
+
+            context.DrawText(
+                formatted,
+                new Point(
+                    pageRect.X + (paragraph.ListLabelX * scale),
+                    pageRect.Y + (line.Bounds.Y * scale)));
+        }
+    }
+
+    private void DrawPageBreaks(
+        DrawingContext context,
+        DocumentLayout layout,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        var selection = Document is null
+            ? default
+            : SelectionMap.Normalize(Selection, Document);
+        var hasSelection = Document is not null && !selection.IsCollapsed;
+
+        foreach (var pageBreak in layout.PageBreaks)
+        {
+            if (pageBreak.PageNumber != page.PageNumber)
+            {
+                continue;
+            }
+
+            var y = pageRect.Y + (pageBreak.Y * scale);
+
+            if (hasSelection && Document is not null)
+            {
+                var paragraph = Document.FindParagraph(pageBreak.ParagraphId);
+
+                if (paragraph is not null)
+                {
+                    var position = TextNavigation.FromParagraphTextOffset(
+                        paragraph,
+                        pageBreak.TextOffset);
+                    var start = selection.GetStart(Document);
+                    var end = selection.GetEnd(Document);
+
+                    if (TextNavigation.Compare(Document, start, position) <= 0
+                        && TextNavigation.Compare(Document, position, end) <= 0)
+                    {
+                        context.FillRectangle(
+                            SelectionBrush,
+                            new Rect(pageRect.X, y - 3, pageRect.Width, 6));
+                    }
+                }
+            }
+
+            context.DrawLine(
+                PageBreakPen,
+                new Point(pageRect.X, y),
+                new Point(pageRect.Right, y));
+
+            var formatted = new FormattedText(
+                "Page break",
+                CultureInfo.InvariantCulture,
+                FlowDirection.LeftToRight,
+                Typeface.Default,
+                10,
+                PageBreakBrush);
+
+            context.DrawText(formatted, new Point(pageRect.X + 4, y - 14));
+        }
     }
 
     private static void DrawLine(

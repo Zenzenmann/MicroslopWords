@@ -250,6 +250,32 @@ public sealed class DocumentPreviewControlTests
         control.Selection.GetStart(document).Offset.ShouldBe(0);
         control.Selection.GetEnd(document).Offset.ShouldBe(5);
     }
+    [AvaloniaFact]
+    public void Clicking_a_page_break_marker_places_the_caret_on_the_break()
+    {
+        var document = CreateDocument("Before\fAfter");
+        var layout = new LayoutEngine().Layout(document);
+        var control = new DocumentPreviewControl
+        {
+            Document = document,
+            Layout = layout,
+            IsEditable = true,
+        };
+        var pageBreak = layout.PageBreaks.Single();
+        var scale = PageViewport.PageScale(1);
+        var point = new Point(
+            DocumentPreviewControl.OuterMarginDips + 40,
+            DocumentPreviewControl.OuterMarginDips + (pageBreak.Y * scale));
+
+        control.SetCaretFromContentPoint(point, extend: false).ShouldBeTrue();
+
+        var paragraph = (ParagraphBlock)document.Sections[0].Blocks[0];
+        TextNavigation.GetParagraphTextOffset(
+                paragraph,
+                control.Selection.Focus.RunId,
+                control.Selection.Focus.Offset)
+            .ShouldBe(6);
+    }
     private static DocumentPreviewControl CreateEditingControl(
         Document document,
         out FakeEditorHost host)
