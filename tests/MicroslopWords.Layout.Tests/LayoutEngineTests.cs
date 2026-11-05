@@ -79,6 +79,7 @@ public sealed class LayoutEngineTests
                 firstLines[line].Text.ShouldBe(secondLines[line].Text);
                 firstLines[line].Bounds.ShouldBe(secondLines[line].Bounds);
                 firstLines[line].ResolvedFont.ShouldBe(secondLines[line].ResolvedFont);
+                firstLines[line].Clusters.ShouldBe(secondLines[line].Clusters);
             }
         }
     }

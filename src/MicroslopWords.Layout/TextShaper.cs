@@ -33,7 +33,7 @@ public sealed class TextShaper : IDisposable
             try
             {
                 _buffer = new HarfBuzzSharp.Buffer();
-                _buffer.ClusterLevel = ClusterLevel.MonotoneCharacters;
+                _buffer.ClusterLevel = ClusterLevel.MonotoneGraphemes;
             }
             catch (DllNotFoundException)
             {
@@ -93,9 +93,12 @@ public sealed class TextShaper : IDisposable
 
         foreach (var rune in text.EnumerateRunes())
         {
-            if (!Rune.IsControl(rune)
-                && rune.Value != ' '
-                && !FontFace.TryGetGlyph(font, (uint)rune.Value, out _))
+            if (IsIgnorableForGlyphCheck(rune))
+            {
+                continue;
+            }
+
+            if (!FontFace.TryGetGlyph(font, (uint)rune.Value, out _))
             {
                 diagnostics.Add(new Diagnostic(
                     LayoutDiagnosticCodes.FontMissingGlyph,
@@ -167,35 +170,36 @@ public sealed class TextShaper : IDisposable
         var buffer = GetBuffer();
         buffer.ClearContents();
         buffer.AddUtf16(text, 0, text.Length);
-        buffer.Direction = Direction.LeftToRight;
-        buffer.Language = new Language(CultureInfo.InvariantCulture.Name);
-        buffer.Script = Script.Parse(text);
+        buffer.Language = new Language("und");
+        buffer.GuessSegmentProperties();
         font.Shape(buffer, features: null);
 
         var infos = buffer.GlyphInfos;
         var positions = buffer.GlyphPositions;
 
-        var clusterBuilder = ImmutableArray.CreateBuilder<GlyphCluster>();
-        var totalAdvance = 0d;
+        var advancesByCluster = new SortedDictionary<int, double>();
 
         for (var index = 0; index < infos.Length; index++)
         {
-            var info = infos[index];
             var position = positions[index];
+            var textStart = Math.Clamp((int)infos[index].Cluster, 0, text.Length - 1);
             var glyphAdvance = position.XAdvance * scale;
 
-            int textStart = (int)info.Cluster;
-            int textLength = index + 1 < infos.Length
-                ? (int)infos[index + 1].Cluster - textStart
-                : text.Length - textStart;
+            advancesByCluster[textStart] = advancesByCluster.GetValueOrDefault(textStart) + glyphAdvance;
+        }
 
-            if (textLength <= 0)
-            {
-                textLength = 1;
-            }
+        var clusterBuilder = ImmutableArray.CreateBuilder<GlyphCluster>(advancesByCluster.Count);
+        var totalAdvance = 0d;
+        var starts = advancesByCluster.Keys.ToArray();
 
-            clusterBuilder.Add(new GlyphCluster(textStart, textLength, glyphAdvance));
-            totalAdvance += glyphAdvance;
+        for (var index = 0; index < starts.Length; index++)
+        {
+            var textStart = starts[index];
+            var textLength = (index + 1 < starts.Length ? starts[index + 1] : text.Length) - textStart;
+            var clusterAdvance = advancesByCluster[textStart];
+
+            clusterBuilder.Add(new GlyphCluster(textStart, textLength, clusterAdvance));
+            totalAdvance += clusterAdvance;
         }
 
         advance = totalAdvance;
@@ -206,19 +210,34 @@ public sealed class TextShaper : IDisposable
         string text,
         double fontSizePoints)
     {
-        var advancePerRune = fontSizePoints * FallbackAdvanceRatio;
-        var clusters = ImmutableArray.CreateBuilder<GlyphCluster>();
-        var offset = 0;
+        var advancePerGrapheme = fontSizePoints * FallbackAdvanceRatio;
+        var elementStarts = StringInfo.ParseCombiningCharacters(text);
+        var clusters = ImmutableArray.CreateBuilder<GlyphCluster>(elementStarts.Length);
         var totalAdvance = 0d;
 
-        foreach (var rune in text.EnumerateRunes())
+        for (var index = 0; index < elementStarts.Length; index++)
         {
-            clusters.Add(new GlyphCluster(offset, rune.Utf16SequenceLength, advancePerRune));
-            offset += rune.Utf16SequenceLength;
-            totalAdvance += advancePerRune;
+            var textStart = elementStarts[index];
+            var textLength = (index + 1 < elementStarts.Length ? elementStarts[index + 1] : text.Length) - textStart;
+
+            clusters.Add(new GlyphCluster(textStart, textLength, advancePerGrapheme));
+            totalAdvance += advancePerGrapheme;
         }
 
         return (clusters.ToImmutable(), totalAdvance);
+    }
+
+    private static bool IsIgnorableForGlyphCheck(Rune rune)
+    {
+        if (rune.Value == ' ')
+        {
+            return true;
+        }
+
+        return Rune.GetUnicodeCategory(rune) is
+            UnicodeCategory.Control or
+            UnicodeCategory.Format or
+            UnicodeCategory.SpaceSeparator;
     }
 
     private static ImmutableArray<Diagnostic> Deduplicate(

@@ -95,6 +95,26 @@ public sealed class FontCatalogTests
     }
 
     [Fact]
+    public void TryResolve_uses_fallback_families_in_catalog_order()
+    {
+        var bytes = TestFonts.TryLoadBytes();
+
+        if (bytes is null)
+        {
+            return;
+        }
+
+        using var first = new FontFace("First", FontWeight.Regular, FontSlant.Upright, bytes);
+        using var second = new FontFace("Second", FontWeight.Regular, FontSlant.Upright, bytes);
+
+        var catalog = FontCatalog.Create([first, second]);
+
+        catalog.FallbackFamilies.ShouldBe(["First", "Second"]);
+        catalog.TryResolve(new FontKey("Missing"), out var resolved).ShouldBeTrue();
+        resolved.Family.ShouldBe("First");
+    }
+
+    [Fact]
     public void Catalog_diagnostics_are_exposed_for_the_layout_result()
     {
         var catalog = FontCatalog.Create(

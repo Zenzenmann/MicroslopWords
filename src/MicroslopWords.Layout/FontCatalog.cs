@@ -36,6 +36,8 @@ public sealed record FontCatalog
         ArgumentNullException.ThrowIfNull(faces);
 
         var builder = ImmutableDictionary.CreateBuilder<FontKey, FontFace>();
+        var orderedFamilies = ImmutableArray.CreateBuilder<string>();
+        var knownFamilies = new HashSet<string>(StringComparer.Ordinal);
         var dropped = ImmutableArray.CreateBuilder<Diagnostic>();
 
         foreach (var face in faces)
@@ -46,10 +48,17 @@ public sealed record FontCatalog
                     LayoutDiagnosticCodes.FontUnreadable,
                     DiagnosticSeverity.Warning,
                     $"Duplicate font face for {face.Family} was ignored."));
+                continue;
+            }
+
+            if (knownFamilies.Add(face.Family))
+            {
+                orderedFamilies.Add(face.Family);
             }
         }
 
-        var fallbacks = (fallbackFamilies ?? builder.Keys.Select(key => key.Family))
+        var fallbacks = (fallbackFamilies ?? orderedFamilies)
+            .Distinct(StringComparer.Ordinal)
             .ToImmutableArray();
 
         var reported = ImmutableArray.CreateBuilder<Diagnostic>();

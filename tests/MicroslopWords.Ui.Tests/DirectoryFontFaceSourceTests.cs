@@ -87,6 +87,31 @@ public sealed class DirectoryFontFaceSourceTests
         }
     }
 
+    [Fact]
+    public void LoadFaces_rejects_corrupt_font_with_diagnostic()
+    {
+        var directory = CreateTemporaryDirectory();
+
+        try
+        {
+            File.WriteAllBytes(
+                Path.Combine(directory, "Broken-Regular.ttf"),
+                Enumerable.Range(0, 512).Select(value => (byte)value).ToArray());
+
+            var source = new DirectoryFontFaceSource([directory]);
+            var result = source.LoadFaces([]);
+
+            result.Faces.ShouldBeEmpty();
+            result.Diagnostics.ShouldContain(diagnostic =>
+                diagnostic.Code == LayoutDiagnosticCodes.FontUnreadable
+                && diagnostic.Message.Contains("Broken-Regular.ttf"));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string CreateTemporaryDirectory()
     {
         var directory = Path.Combine(

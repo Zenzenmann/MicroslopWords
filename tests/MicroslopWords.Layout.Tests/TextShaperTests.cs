@@ -54,6 +54,35 @@ public sealed class TextShaperTests
     }
 
     [Fact]
+    public void Shape_fallback_clusters_preserve_grapheme_boundaries()
+    {
+        using var shaper = new TextShaper(FontCatalog.Empty);
+        var text = "e\u0301x";
+
+        var shaped = shaper.Shape(text, new FontKey("Arial"), 12);
+
+        shaped.Clusters.Length.ShouldBe(2);
+        shaped.Clusters[0].TextStart.ShouldBe(0);
+        shaped.Clusters[0].TextLength.ShouldBe(2);
+        shaped.Clusters[1].TextStart.ShouldBe(2);
+        shaped.Clusters[1].TextLength.ShouldBe(1);
+        AssertClustersCoverText(shaped, text);
+    }
+
+    [Fact]
+    public void Shape_fallback_keeps_emoji_zwj_sequence_in_one_cluster()
+    {
+        using var shaper = new TextShaper(FontCatalog.Empty);
+        var text = "\U0001F468\u200D\U0001F469\u200D\U0001F467";
+
+        var shaped = shaper.Shape(text, new FontKey("Arial"), 12);
+
+        shaped.Clusters.Length.ShouldBe(1);
+        shaped.Clusters[0].TextStart.ShouldBe(0);
+        shaped.Clusters[0].TextLength.ShouldBe(text.Length);
+    }
+
+    [Fact]
     public void Shape_with_font_produces_positive_advances_and_clusters()
     {
         var bytes = TestFonts.TryLoadBytes();
@@ -74,6 +103,29 @@ public sealed class TextShaperTests
         shaped.Clusters.ShouldNotBeEmpty();
         shaped.Clusters.ShouldAllBe(cluster => cluster.Advance > 0);
         shaped.Diagnostics.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Shape_with_fallback_family_reports_substitution_and_keeps_requested_name()
+    {
+        var bytes = TestFonts.TryLoadBytes();
+
+        if (bytes is null)
+        {
+            return;
+        }
+
+        using var fallback = new FontFace("Fallback", FontWeight.Regular, FontSlant.Upright, bytes);
+        var catalog = FontCatalog.Create([fallback], fallbackFamilies: ["Fallback"]);
+        using var shaper = new TextShaper(catalog);
+        var request = new FontKey("Requested", FontWeight.Regular, FontSlant.Upright);
+
+        var shaped = shaper.Shape("Hello", request, 12);
+
+        shaped.ResolvedFont.ShouldBe(fallback.Key);
+        shaped.Diagnostics.ShouldContain(diagnostic =>
+            diagnostic.Code == LayoutDiagnosticCodes.FontSubstituted
+            && diagnostic.Message.Contains("Requested"));
     }
 
     [Fact]
@@ -103,6 +155,78 @@ public sealed class TextShaperTests
     }
 
     [Fact]
+    public void Shape_with_font_keeps_combining_mark_in_base_cluster()
+    {
+        var bytes = TestFonts.TryLoadBytes();
+
+        if (bytes is null)
+        {
+            return;
+        }
+
+        using var face = new FontFace("Test", FontWeight.Regular, FontSlant.Upright, bytes);
+        var catalog = FontCatalog.Create([face]);
+        using var shaper = new TextShaper(catalog);
+        var text = "e\u0301x";
+
+        var shaped = shaper.Shape(text, new FontKey("Test"), 16);
+
+        shaped.Clusters.Length.ShouldBe(2);
+        shaped.Clusters[0].TextStart.ShouldBe(0);
+        shaped.Clusters[0].TextLength.ShouldBe(2);
+        shaped.Clusters[1].TextStart.ShouldBe(2);
+        AssertClustersCoverText(shaped, text);
+    }
+
+    [Fact]
+    public void Shape_with_complex_script_font_keeps_text_intact()
+    {
+        var bytes = TestFonts.TryLoadComplexScriptBytes();
+
+        if (bytes is null)
+        {
+            return;
+        }
+
+        using var face = new FontFace("Complex", FontWeight.Regular, FontSlant.Upright, bytes);
+        var catalog = FontCatalog.Create([face]);
+        using var shaper = new TextShaper(catalog);
+        var text = "\u0939\u093F\u0928\u094D\u0926\u0940";
+
+        var shaped = shaper.Shape(text, new FontKey("Complex"), 16);
+
+        shaped.Diagnostics.ShouldNotContain(diagnostic =>
+            diagnostic.Code == LayoutDiagnosticCodes.FontMissingGlyph);
+        shaped.Clusters.ShouldNotBeEmpty();
+        shaped.AdvanceWidthPoints.ShouldBeGreaterThan(0);
+        AssertClustersCoverText(shaped, text);
+    }
+
+    [Fact]
+    public void Shape_with_emoji_font_keeps_emoji_sequence_in_one_cluster()
+    {
+        var bytes = TestFonts.TryLoadEmojiBytes();
+
+        if (bytes is null)
+        {
+            return;
+        }
+
+        using var face = new FontFace("Emoji", FontWeight.Regular, FontSlant.Upright, bytes);
+        var catalog = FontCatalog.Create([face]);
+        using var shaper = new TextShaper(catalog);
+        var text = "\U0001F468\u200D\U0001F469\u200D\U0001F467";
+
+        var shaped = shaper.Shape(text, new FontKey("Emoji"), 16);
+
+        shaped.Diagnostics.ShouldNotContain(diagnostic =>
+            diagnostic.Code == LayoutDiagnosticCodes.FontMissingGlyph);
+        shaped.Clusters.Length.ShouldBe(1);
+        shaped.Clusters[0].TextStart.ShouldBe(0);
+        shaped.Clusters[0].TextLength.ShouldBe(text.Length);
+    }
+
+    [Fact]
     public void Shape_reports_missing_glyph_once_for_unsupported_character()
     {
         var bytes = TestFonts.TryLoadBytes();
@@ -120,5 +244,19 @@ public sealed class TextShaperTests
 
         shaped.Diagnostics.Count(diagnostic =>
             diagnostic.Code == LayoutDiagnosticCodes.FontMissingGlyph).ShouldBe(1);
+    }
+
+    private static void AssertClustersCoverText(ShapedText shaped, string text)
+    {
+        var expectedStart = 0;
+
+        foreach (var cluster in shaped.Clusters)
+        {
+            cluster.TextStart.ShouldBe(expectedStart);
+            cluster.TextLength.ShouldBeGreaterThan(0);
+            expectedStart += cluster.TextLength;
+        }
+
+        expectedStart.ShouldBe(text.Length);
     }
 }
