@@ -1,0 +1,90 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:automation="using:Avalonia.Automation"
+             xmlns:vm="using:MicroslopWords.App.ViewModels"
+             x:Class="MicroslopWords.App.Views.FindPanel"
+             x:DataType="vm:MainViewModel">
+
+    <Border Width="320"
+            Background="#F8F9FB"
+            BorderBrush="#D8DEE5"
+            BorderThickness="0,0,1,0"
+            Padding="12">
+        <DockPanel>
+            <Grid DockPanel.Dock="Top"
+                  ColumnDefinitions="*,Auto"
+                  Margin="0,0,0,12">
+                <TextBlock Text="Find and replace"
+                           FontSize="14"
+                           FontWeight="SemiBold"
+                           VerticalAlignment="Center" />
+                <Button Grid.Column="1"
+                        Content="Close"
+                        Command="{Binding CloseFindCommand}"
+                        Padding="8,2"
+                        automation:AutomationProperties.Name="Close find panel" />
+            </Grid>
+
+            <StackPanel DockPanel.Dock="Top" Spacing="10">
+                <TextBox x:Name="SearchBox"
+                         Text="{Binding FindQuery, Mode=TwoWay}"
+                         PlaceholderText="Search document"
+                         automation:AutomationProperties.Name="Search document" />
+
+                <StackPanel Orientation="Horizontal" Spacing="12">
+                    <CheckBox Content="Match case"
+                              IsChecked="{Binding MatchCase, Mode=TwoWay}" />
+                    <CheckBox Content="Whole words"
+                              IsChecked="{Binding WholeWords, Mode=TwoWay}" />
+                </StackPanel>
+
+                <Grid ColumnDefinitions="Auto,Auto,*">
+                    <Button Content="Previous"
+                            Command="{Binding FindPreviousCommand}"
+                            IsEnabled="{Binding HasSearchMatches}"
+                            Margin="0,0,8,0"
+                            automation:AutomationProperties.Name="Find previous" />
+                    <Button Grid.Column="1"
+                            Content="Next"
+                            Command="{Binding FindNextCommand}"
+                            IsEnabled="{Binding HasSearchMatches}"
+                            Margin="0,0,10,0"
+                            automation:AutomationProperties.Name="Find next" />
+                    <TextBlock Grid.Column="2"
+                               Text="{Binding FindStatusText}"
+                               FontSize="12"
+                               Foreground="#4E5965"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center" />
+                </Grid>
+
+                <ToggleButton Content="Replace"
+                              IsChecked="{Binding IsReplaceRowVisible, Mode=TwoWay}"
+                              IsEnabled="{Binding IsEditingEnabled}"
+                              HorizontalAlignment="Left" />
+
+                <StackPanel Spacing="8"
+                            IsVisible="{Binding IsReplaceRowVisible}"
+                            IsEnabled="{Binding IsEditingEnabled}">
+                    <TextBox x:Name="ReplaceBox"
+                             Text="{Binding ReplaceQuery, Mode=TwoWay}"
+                             PlaceholderText="Replace with"
+                             automation:AutomationProperties.Name="Replace with" />
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Replace"
+                                Command="{Binding ReplaceCommand}"
+                                IsEnabled="{Binding HasSearchMatches}" />
+                        <Button Content="Replace all"
+                                Command="{Binding ReplaceAllCommand}"
+                                IsEnabled="{Binding HasSearchMatches}" />
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock Text="Enter next  ·  Shift+Enter previous  ·  Esc close"
+                           FontSize="11"
+                           Foreground="#5F6A76"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+        </DockPanel>
+    </Border>
+</UserControl>

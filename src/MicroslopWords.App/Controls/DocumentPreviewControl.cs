@@ -29,6 +29,10 @@ public sealed class DocumentPreviewControl : Control
             default,
             defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
 
+    public static readonly StyledProperty<IReadOnlyList<Selection>?> SearchHighlightsProperty =
+        AvaloniaProperty.Register<DocumentPreviewControl, IReadOnlyList<Selection>?>(
+            nameof(SearchHighlights));
+
     public static readonly StyledProperty<bool> IsEditableProperty =
         AvaloniaProperty.Register<DocumentPreviewControl, bool>(nameof(IsEditable));
 
@@ -55,6 +59,9 @@ public sealed class DocumentPreviewControl : Control
 
     private static readonly IBrush SelectionBrush =
         new SolidColorBrush(Color.Parse("#CFE3F5"));
+
+    private static readonly IBrush SearchHighlightBrush =
+        new SolidColorBrush(Color.Parse("#FFF0B3"));
 
     private static readonly IBrush CaretBrush =
         new SolidColorBrush(Color.Parse("#1B1F24"));
@@ -102,6 +109,12 @@ public sealed class DocumentPreviewControl : Control
     {
         get => GetValue(SelectionProperty);
         set => SetValue(SelectionProperty, value);
+    }
+
+    public IReadOnlyList<Selection>? SearchHighlights
+    {
+        get => GetValue(SearchHighlightsProperty);
+        set => SetValue(SearchHighlightsProperty, value);
     }
 
     public bool IsEditable
@@ -181,6 +194,10 @@ public sealed class DocumentPreviewControl : Control
             InvalidateVisual();
             RequestEnsureCaretVisible();
         }
+        else if (change.Property == SearchHighlightsProperty)
+        {
+            InvalidateVisual();
+        }
         else if (change.Property == IsEditableProperty && !IsEditable)
         {
             _compositionText = string.Empty;
@@ -253,6 +270,7 @@ public sealed class DocumentPreviewControl : Control
 
             using (context.PushClip(pageRect))
             {
+                DrawSearchHighlights(context, page, pageRect, scale);
                 DrawSelection(context, page, pageRect, scale);
                 DrawListLabels(context, page, pageRect, scale);
 
@@ -1022,30 +1040,89 @@ public sealed class DocumentPreviewControl : Control
         }
     }
 
+    private void DrawSearchHighlights(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        var document = Document;
+
+        if (document is null
+            || Layout is null
+            || SearchHighlights is not { Count: > 0 } highlights)
+        {
+            return;
+        }
+
+        var paragraphs = GetDocumentParagraphs(document);
+
+        foreach (var highlight in highlights)
+        {
+            var selection = SelectionMap.Normalize(highlight, document);
+
+            if (!selection.IsCollapsed)
+            {
+                DrawRange(
+                    context,
+                    page,
+                    pageRect,
+                    scale,
+                    paragraphs,
+                    selection,
+                    SearchHighlightBrush);
+            }
+        }
+    }
+
     private void DrawSelection(
         DrawingContext context,
         PageLayout page,
         Rect pageRect,
         double scale)
     {
-        if (Document is null || Layout is null)
+        var document = Document;
+
+        if (document is null || Layout is null)
         {
             return;
         }
 
-        var selection = SelectionMap.Normalize(Selection, Document);
+        var selection = SelectionMap.Normalize(Selection, document);
 
         if (selection.IsCollapsed)
         {
             return;
         }
 
-        var paragraphs = Document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .ToList();
-        var start = selection.GetStart(Document);
-        var end = selection.GetEnd(Document);
+        DrawRange(
+            context,
+            page,
+            pageRect,
+            scale,
+            GetDocumentParagraphs(document),
+            selection,
+            SelectionBrush);
+    }
+
+    private void DrawRange(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale,
+        List<ParagraphBlock> paragraphs,
+        Selection selection,
+        IBrush brush)
+    {
+        var document = Document;
+
+        if (document is null)
+        {
+            return;
+        }
+
+        var start = selection.GetStart(document);
+        var end = selection.GetEnd(document);
         var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
         var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
 
@@ -1091,10 +1168,16 @@ public sealed class DocumentPreviewControl : Control
                     Math.Max(1, (right - x) * scale),
                     line.Bounds.Height * scale);
 
-                context.FillRectangle(SelectionBrush, rect);
+                context.FillRectangle(brush, rect);
             }
         }
     }
+
+    private static List<ParagraphBlock> GetDocumentParagraphs(Document document) =>
+        document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .ToList();
 
     private void DrawCaret(DrawingContext context, double scale)
     {
