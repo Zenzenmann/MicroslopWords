@@ -176,7 +176,6 @@ public sealed class TextShaper : IDisposable
 
         var infos = buffer.GlyphInfos;
         var positions = buffer.GlyphPositions;
-
         var advancesByCluster = new SortedDictionary<int, double>();
 
         for (var index = 0; index < infos.Length; index++)

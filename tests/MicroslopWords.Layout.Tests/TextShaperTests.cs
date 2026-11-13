@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using System.Runtime;
 using MicroslopWords.Core.Diagnostics;
 using Shouldly;
 
@@ -244,6 +246,42 @@ public sealed class TextShaperTests
 
         shaped.Diagnostics.Count(diagnostic =>
             diagnostic.Code == LayoutDiagnosticCodes.FontMissingGlyph).ShouldBe(1);
+    }
+
+    [Fact]
+    public void Shape_is_safe_when_multiple_callers_shape_concurrently()
+    {
+        var bytes = TestFonts.TryLoadBytes();
+
+        if (bytes is null)
+        {
+            return;
+        }
+
+        using var face = new FontFace("Test", FontWeight.Regular, FontSlant.Upright, bytes);
+        var catalog = FontCatalog.Create([face]);
+        var results = new ConcurrentBag<ShapedText>();
+        var request = new FontKey("Test", FontWeight.Regular, FontSlant.Upright);
+
+        Parallel.For(0, 8, _ =>
+        {
+            using var shaper = new TextShaper(catalog);
+
+            for (var iteration = 0; iteration < 25; iteration++)
+            {
+                results.Add(shaper.Shape("Concurrent shaping", request, 12));
+
+                if (iteration % 5 == 0)
+                {
+                    GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
+                    GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
+                }
+            }
+        });
+
+        results.Count.ShouldBe(200);
+        results.ShouldAllBe(shaped => shaped.Clusters.Length > 0);
+        results.Select(shaped => shaped.AdvanceWidthPoints).Distinct().Count().ShouldBe(1);
     }
 
     private static void AssertClustersCoverText(ShapedText shaped, string text)
