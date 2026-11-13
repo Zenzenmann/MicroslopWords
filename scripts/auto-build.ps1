@@ -1,15 +1,16 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Run one BMAD story through opencode, verify the repository gates, and merge it to main.
+    Run one BMAD story through opencode, verify the repository gates, and merge its pull request.
 
 .DESCRIPTION
     This is the only supported unattended coding entry point. It refuses to run on a
     dirty tree, creates or switches to story/<id>, invokes the opencode development
     agent with the story prompt from stories.yaml, runs build/test/format gates,
-    retries at most -MaxAttempts times, commits, pushes the story branch, and merges
-    to main only after every gate passes. It never edits SPEC.md, architecture.md,
-    release workflows, story metadata, or Directory.Packages.props.
+    retries at most -MaxAttempts times, commits, pushes the story branch, opens a
+    pull request, waits for the required CI checks, merges the pull request, and
+    verifies main. It never edits SPEC.md, architecture.md, release workflows, story
+    metadata, or Directory.Packages.props.
 
 .EXAMPLE
     .\scripts\auto-build.ps1 -Story STORY-001
@@ -70,6 +71,38 @@ function Invoke-Native {
     }
 
     return $exitCode
+}
+
+function Invoke-NativeCapture {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$Arguments = @(),
+        [string]$LogPath
+    )
+
+    $previousErrorAction = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $output = & $FilePath @Arguments 2>&1
+        $exitCode = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $previousErrorAction
+    }
+    $text = @($output | ForEach-Object { "$_" })
+
+    if ($LogPath) {
+        $parent = Split-Path -Parent $LogPath
+        if ($parent -and -not (Test-Path -LiteralPath $parent)) {
+            New-Item -ItemType Directory -Path $parent -Force | Out-Null
+        }
+        $text | Out-File -LiteralPath $LogPath -Encoding utf8 -Append
+    }
+
+    return [pscustomobject]@{
+        ExitCode = $exitCode
+        Output   = $text
+    }
 }
 
 function Get-StoryField {
@@ -225,6 +258,9 @@ try {
     if (-not (Get-Command opencode -ErrorAction SilentlyContinue)) {
         throw 'opencode was not found on PATH.'
     }
+    if (-not (Get-Command gh -ErrorAction SilentlyContinue)) {
+        throw 'gh was not found on PATH.'
+    }
 
     $dirty = @(git -C $repoRoot status --porcelain)
     if ($dirty.Count -gt 0) {
@@ -375,41 +411,102 @@ $invoke
     git -C $repoRoot push -u origin $branch
     if ($LASTEXITCODE -ne 0) { throw "git push failed for $branch." }
 
-    Write-Host "Switching to main and merging $Story."
+    $prLog = Join-Path $logDir "$Story-pr.log"
+    $lastLog = $prLog
+    $prBody = @"
+Automated by scripts/auto-build.ps1 for $Story.
+
+Story: $title
+
+Local gates passed: dotnet build, dotnet test, dotnet format --verify-no-changes, git diff --check.
+Required CI checks: build-test (ubuntu-latest), build-test (windows-latest), build-test (macos-latest), format.
+"@
+
+    Write-Host "Opening or updating the pull request for $branch."
+    $prView = Invoke-NativeCapture -FilePath 'gh' -Arguments @('pr', 'view', $branch, '--json', 'number,state,url') -LogPath $prLog
+    if ($prView.ExitCode -eq 0) {
+        $prInfo = ($prView.Output -join "`n") | ConvertFrom-Json
+        if ($prInfo.state -eq 'MERGED') {
+            throw "Pull request for $branch is already merged."
+        }
+        if ($prInfo.state -eq 'CLOSED') {
+            throw "Pull request for $branch is closed. Reopen it or delete the branch before retrying."
+        }
+        Write-Host "Using existing pull request #$($prInfo.number): $($prInfo.url)"
+    }
+    else {
+        $prCreate = Invoke-NativeCapture -FilePath 'gh' -Arguments @(
+            'pr', 'create',
+            '--base', 'main',
+            '--head', $branch,
+            '--title', $commitMessage,
+            '--body', $prBody
+        ) -LogPath $prLog
+        if ($prCreate.ExitCode -ne 0) {
+            throw "gh pr create failed with exit code $($prCreate.ExitCode)."
+        }
+        Write-Host (($prCreate.Output -join "`n").Trim())
+    }
+
+    $requiredChecks = @(
+        'build-test (ubuntu-latest)',
+        'build-test (windows-latest)',
+        'build-test (macos-latest)',
+        'format'
+    )
+    Write-Host "Waiting for required checks to appear on $branch."
+    $checksAppeared = $false
+    for ($poll = 0; $poll -lt 30; $poll++) {
+        $checksJson = Invoke-NativeCapture -FilePath 'gh' -Arguments @('pr', 'checks', $branch, '--json', 'name,state') -LogPath $prLog
+        $checks = @()
+        if ($checksJson.Output.Count -gt 0) {
+            try {
+                $checks = @(($checksJson.Output -join "`n") | ConvertFrom-Json)
+            }
+            catch {
+                $checks = @()
+            }
+        }
+        $names = @($checks | ForEach-Object { $_.name })
+        $missing = @($requiredChecks | Where-Object { $names -notcontains $_ })
+        if ($missing.Count -eq 0) {
+            $checksAppeared = $true
+            break
+        }
+        Start-Sleep -Seconds 10
+    }
+    if (-not $checksAppeared) {
+        throw "Required checks did not appear on $branch within 5 minutes."
+    }
+
+    Write-Host "Waiting for required checks on $branch to pass."
+    $checksExit = Invoke-Native -FilePath 'gh' -Arguments @('pr', 'checks', $branch, '--watch', '--fail-fast') -LogPath $prLog -Append
+    if ($checksExit -ne 0) {
+        throw "Required checks for $branch failed or did not complete (exit code $checksExit)."
+    }
+
+    Write-Host "Merging pull request for $branch."
+    $mergeExit = Invoke-Native -FilePath 'gh' -Arguments @('pr', 'merge', $branch, '--merge') -LogPath $prLog -Append
+    if ($mergeExit -ne 0) {
+        throw "gh pr merge failed with exit code $mergeExit."
+    }
+
+    Write-Host "Switching to main and syncing the merged result."
     git -C $repoRoot switch main
     if ($LASTEXITCODE -ne 0) { throw 'Could not switch to main.' }
 
     git -C $repoRoot pull --ff-only origin main
     if ($LASTEXITCODE -ne 0) { throw 'Could not fast-forward main from origin.' }
 
-    $preMergeHead = (git -C $repoRoot rev-parse HEAD).Trim()
-    git -C $repoRoot merge --no-ff $branch -m "Merge ${Story}: $title"
-    if ($LASTEXITCODE -ne 0) {
-        git -C $repoRoot merge --abort 2>$null | Out-Null
-        throw "Merge of $branch into main failed."
-    }
+    git -C $repoRoot branch -d $branch 2>$null | Out-Null
 
     $mergeLog = Join-Path $logDir "$Story-merge.log"
     $lastLog = $mergeLog
-    try {
-        Invoke-Gate -Name 'post-merge build' -Arguments @('build', 'MicroslopWords.slnx') -LogPath $mergeLog
-        Invoke-Gate -Name 'post-merge test' -Arguments @('test', 'MicroslopWords.slnx', '--no-build') -LogPath $mergeLog
-        Invoke-Gate -Name 'post-merge format' -Arguments @('format', '--verify-no-changes') -LogPath $mergeLog
-    }
-    catch {
-        git -C $repoRoot reset --hard $preMergeHead | Out-Null
-        git -C $repoRoot switch $branch | Out-Null
-        throw "Post-merge gate failed: $($_.Exception.Message)"
-    }
+    Invoke-Gate -Name 'post-merge build' -Arguments @('build', 'MicroslopWords.slnx') -LogPath $mergeLog
+    Invoke-Gate -Name 'post-merge test' -Arguments @('test', 'MicroslopWords.slnx', '--no-build') -LogPath $mergeLog
+    Invoke-Gate -Name 'post-merge format' -Arguments @('format', '--verify-no-changes') -LogPath $mergeLog
 
-    git -C $repoRoot push origin main
-    if ($LASTEXITCODE -ne 0) {
-        git -C $repoRoot reset --hard $preMergeHead | Out-Null
-        git -C $repoRoot switch $branch | Out-Null
-        throw 'git push failed for main.'
-    }
-
-    Write-Host "Merged $Story to main: $commitMessage"
+    Write-Host "Merged $Story to main through a pull request: $commitMessage"
     exit 0
 }
 catch {
