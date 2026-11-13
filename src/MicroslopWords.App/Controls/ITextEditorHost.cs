@@ -15,4 +15,11 @@ public interface ITextEditorHost
     void SplitParagraph();
 
     void InsertSoftBreak();
+
+    void ResizeImage(
+        Guid paragraphId,
+        Guid runId,
+        double widthPoints,
+        double heightPoints,
+        bool lockAspectRatio);
 }

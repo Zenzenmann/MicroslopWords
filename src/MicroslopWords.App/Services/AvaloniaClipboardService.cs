@@ -1,6 +1,7 @@
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.Platform;
+using Avalonia.Media.Imaging;
 using MicroslopWords.Core.Documents;
 
 namespace MicroslopWords.App.Services;
@@ -45,12 +46,26 @@ public sealed class AvaloniaClipboardService : IClipboardService
                 && string.Equals(text, _lastText, StringComparison.Ordinal)
                     ? _lastFragment
                     : null;
+            byte[]? imagePng = null;
+
+            if (hasImage)
+            {
+                using var bitmap = await clipboard.TryGetValueAsync(DataFormat.Bitmap);
+
+                if (bitmap is not null)
+                {
+                    using var imageStream = new MemoryStream();
+                    bitmap.Save(imageStream, PngBitmapEncoderOptions.Default);
+                    imagePng = imageStream.ToArray();
+                }
+            }
 
             return new ClipboardContent(
                 text,
                 html,
                 fragment,
-                hasImage);
+                hasImage,
+                imagePng);
         }
         catch (Exception exception) when (
             exception is not OperationCanceledException)

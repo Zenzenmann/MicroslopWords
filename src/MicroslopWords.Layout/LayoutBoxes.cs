@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using MicroslopWords.Core.Documents;
 
 namespace MicroslopWords.Layout;
 
@@ -14,6 +15,12 @@ public sealed record LineSpan(
     bool Underline,
     bool Strikethrough);
 
+public sealed record InlineImageLayout(
+    Guid RunId,
+    int TextOffset,
+    LayoutRect Bounds,
+    InlineImage Image);
+
 public sealed record LineLayout(
     string Text,
     int TextStart,
@@ -22,7 +29,8 @@ public sealed record LineLayout(
     double FontSizePoints,
     ImmutableArray<GlyphCluster> Clusters,
     FontKey ResolvedFont,
-    ImmutableArray<LineSpan> Spans);
+    ImmutableArray<LineSpan> Spans,
+    ImmutableArray<InlineImageLayout> Images);
 
 public sealed record ParagraphLayout(
     Guid ParagraphId,

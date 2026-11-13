@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
@@ -7,11 +8,15 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
 using MicroslopWords.Core.Styles;
+using A = DocumentFormat.OpenXml.Drawing;
 using CoreDocument = MicroslopWords.Core.Documents.Document;
 using CoreParagraphProperties = MicroslopWords.Core.Documents.ParagraphProperties;
 using CoreRun = MicroslopWords.Core.Documents.Run;
 using CoreRunProperties = MicroslopWords.Core.Documents.RunProperties;
+using Dwp = DocumentFormat.OpenXml.Drawing.Wordprocessing;
+using Pic = DocumentFormat.OpenXml.Drawing.Pictures;
 using WpDocument = DocumentFormat.OpenXml.Wordprocessing.Document;
+using WpDrawing = DocumentFormat.OpenXml.Wordprocessing.Drawing;
 using WpParagraph = DocumentFormat.OpenXml.Wordprocessing.Paragraph;
 using WpParagraphProperties = DocumentFormat.OpenXml.Wordprocessing.ParagraphProperties;
 using WpRun = DocumentFormat.OpenXml.Wordprocessing.Run;
@@ -68,6 +73,7 @@ public static class DocxService
             var blocks = ImmutableArray.CreateBuilder<Block>();
             var numbering = mainPart.NumberingDefinitionsPart?.Numbering;
             var listIds = new Dictionary<long, Guid>();
+            var images = new Dictionary<string, ImportedImage>(StringComparer.Ordinal);
             SectionProperties? sectionProperties = null;
 
             foreach (var element in body.ChildElements)
@@ -77,7 +83,13 @@ public static class DocxService
                 switch (element)
                 {
                     case WpParagraph paragraph:
-                        blocks.Add(ToParagraphBlock(paragraph, Report, numbering, listIds));
+                        blocks.Add(ToParagraphBlock(
+                            paragraph,
+                            mainPart,
+                            images,
+                            Report,
+                            numbering,
+                            listIds));
                         break;
                     case Table:
                         Report(
@@ -140,6 +152,8 @@ public static class DocxService
         SaveStyles(mainPart, document.EffectiveStyles);
 
         var numberingIds = PrepareNumbering(mainPart, document);
+        var imageRelationships = new Dictionary<string, string>(StringComparer.Ordinal);
+        var nextDrawingId = 1u;
 
         foreach (var paragraphBlock in document.Sections
                      .SelectMany(section => section.Blocks)
@@ -166,7 +180,25 @@ public static class DocxService
                     wpRun.Append(wordProperties);
                 }
 
-                AppendRunText(wpRun, run.Text);
+                if (run.EffectiveImage is { } image)
+                {
+                    if (!image.IsPlaceholder)
+                    {
+                        var relationshipId = GetOrCreateImagePart(
+                            mainPart,
+                            image,
+                            imageRelationships);
+                        wpRun.Append(BuildInlineImage(
+                            image,
+                            relationshipId,
+                            nextDrawingId++));
+                    }
+                }
+                else
+                {
+                    AppendRunText(wpRun, run.Text);
+                }
+
                 paragraph.Append(wpRun);
             }
 
@@ -183,6 +215,106 @@ public static class DocxService
 
         mainPart.Document.Save();
     }
+
+    private static string GetOrCreateImagePart(
+        MainDocumentPart mainPart,
+        InlineImage image,
+        Dictionary<string, string> relationships)
+    {
+        var hash = Convert.ToHexString(SHA256.HashData(image.Data.AsSpan()));
+        var key = $"{image.Format}:{hash}";
+
+        if (relationships.TryGetValue(key, out var existing))
+        {
+            return existing;
+        }
+
+        var partType = image.Format switch
+        {
+            ImageFormat.Png => ImagePartType.Png,
+            ImageFormat.Jpeg => ImagePartType.Jpeg,
+            ImageFormat.Gif => ImagePartType.Gif,
+            _ => ImagePartType.Png,
+        };
+        var part = mainPart.AddImagePart(partType);
+
+        using (var stream = new MemoryStream(image.Data.ToArray(), writable: false))
+        {
+            part.FeedData(stream);
+        }
+
+        var relationshipId = mainPart.GetIdOfPart(part);
+        relationships[key] = relationshipId;
+
+        return relationshipId;
+    }
+
+    private static WpDrawing BuildInlineImage(
+        InlineImage image,
+        string relationshipId,
+        uint drawingId)
+    {
+        var width = ToEmu(image.WidthPoints);
+        var height = ToEmu(image.HeightPoints);
+        var name = Truncate(image.FileName, 255);
+        var description = Truncate(image.AltText, 255);
+        var inline = new Dwp.Inline(
+            new Dwp.Extent { Cx = width, Cy = height },
+            new Dwp.DocProperties
+            {
+                Id = drawingId,
+                Name = name,
+                Description = description,
+            },
+            new Dwp.NonVisualGraphicFrameDrawingProperties(
+                new A.GraphicFrameLocks
+                {
+                    NoChangeAspect = image.LockAspectRatio,
+                }),
+            new A.Graphic(
+                new A.GraphicData(
+                    new Pic.Picture(
+                        new Pic.NonVisualPictureProperties(
+                            new A.NonVisualDrawingProperties
+                            {
+                                Id = drawingId,
+                                Name = name,
+                                Description = description,
+                            },
+                            new Pic.NonVisualPictureDrawingProperties(
+                                new A.PictureLocks
+                                {
+                                    NoChangeAspect = image.LockAspectRatio,
+                                })),
+                        new Pic.BlipFill(
+                            new A.Blip { Embed = relationshipId },
+                            new A.Stretch(new A.FillRectangle())),
+                        new Pic.ShapeProperties(
+                            new A.Transform2D(
+                                new A.Offset { X = 0L, Y = 0L },
+                                new A.Extents { Cx = width, Cy = height }),
+                            new A.PresetGeometry(new A.AdjustValueList())
+                            {
+                                Preset = A.ShapeTypeValues.Rectangle,
+                            })))
+                {
+                    Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture",
+                }))
+        {
+            DistanceFromTop = 0U,
+            DistanceFromBottom = 0U,
+            DistanceFromLeft = 0U,
+            DistanceFromRight = 0U,
+        };
+
+        return new WpDrawing(inline);
+    }
+
+    private static long ToEmu(double points) =>
+        Math.Max(1, (long)Math.Round(points * 12700));
+
+    private static string Truncate(string value, int length) =>
+        value.Length <= length ? value : value[..length];
 
     private static Dictionary<Guid, int> PrepareNumbering(
         MainDocumentPart mainPart,
@@ -1051,9 +1183,161 @@ public static class DocxService
             styles[index] = style;
         }
     }
+    private sealed record ImportedImage(
+        ImageFormat Format,
+        ImmutableArray<byte> Data,
+        int PixelWidth,
+        int PixelHeight);
+
+    private static InlineImage? TryCreateInlineImage(
+        WpDrawing drawing,
+        MainDocumentPart mainPart,
+        Dictionary<string, ImportedImage> images,
+        Action<string, string> report)
+    {
+        if (drawing.GetFirstChild<Dwp.Anchor>() is not null)
+        {
+            report(
+                DocxDiagnosticCodes.UnsupportedImage,
+                "Floating images are not supported and were skipped.");
+            return null;
+        }
+
+        var inline = drawing.GetFirstChild<Dwp.Inline>();
+
+        if (inline is null)
+        {
+            report(
+                DocxDiagnosticCodes.UnsupportedImage,
+                "An image in this document uses an unsupported drawing format.");
+            return null;
+        }
+
+        var properties = inline.DocProperties;
+        var name = string.IsNullOrWhiteSpace(properties?.Name?.Value)
+            ? "Image"
+            : properties.Name.Value;
+        var altText = properties?.Description?.Value ?? string.Empty;
+        var width = inline.Extent?.Cx?.Value is { } cx && cx > 0
+            ? cx / 12700.0
+            : 0;
+        var height = inline.Extent?.Cy?.Value is { } cy && cy > 0
+            ? cy / 12700.0
+            : 0;
+        var picture = inline.Graphic?.GraphicData?
+            .GetFirstChild<Pic.Picture>();
+        var relationshipId = picture?.BlipFill?.Blip?.Embed?.Value;
+
+        if (relationshipId is null)
+        {
+            report(
+                DocxDiagnosticCodes.UnsupportedImage,
+                "An image in this document has no embedded media.");
+            return CreatePlaceholder(width, height, name, altText);
+        }
+
+        if (!images.TryGetValue(relationshipId, out var imported))
+        {
+            ImagePart? part;
+
+            try
+            {
+                part = mainPart.GetPartById(relationshipId) as ImagePart;
+            }
+            catch (Exception exception) when (
+                exception is ArgumentOutOfRangeException or KeyNotFoundException)
+            {
+                part = null;
+            }
+
+            if (part is null)
+            {
+                report(
+                    DocxDiagnosticCodes.UnsupportedImage,
+                    "An embedded image is missing and was replaced by a placeholder.");
+                return CreatePlaceholder(width, height, name, altText);
+            }
+
+            using var stream = part.GetStream();
+
+            if (stream.Length > ImageValidation.MaxImageBytes)
+            {
+                report(
+                    DocxDiagnosticCodes.UnsupportedImage,
+                    "An embedded image is larger than 50 MB and was replaced by a placeholder.");
+                return CreatePlaceholder(width, height, name, altText);
+            }
+
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            var data = buffer.ToArray();
+            var inspected = ImageValidation.Inspect(data);
+
+            if (!inspected.IsSuccess || inspected.Value is null)
+            {
+                var reason = inspected.Diagnostics.FirstOrDefault()?.Message
+                    ?? "An embedded image is damaged.";
+                report(DocxDiagnosticCodes.UnsupportedImage, reason);
+                return CreatePlaceholder(width, height, name, altText);
+            }
+
+            imported = new ImportedImage(
+                inspected.Value.Format,
+                data.ToImmutableArray(),
+                inspected.Value.PixelWidth,
+                inspected.Value.PixelHeight);
+            images[relationshipId] = imported;
+        }
+
+        if (width <= 0 || height <= 0)
+        {
+            var natural = ImageValidation.NaturalSize(
+                new ImageMetadata(
+                    imported.Format,
+                    imported.PixelWidth,
+                    imported.PixelHeight));
+            width = natural.Width;
+            height = natural.Height;
+        }
+
+        var locks = picture?.NonVisualPictureProperties?
+            .NonVisualPictureDrawingProperties?
+            .GetFirstChild<A.PictureLocks>();
+        var lockAspectRatio = locks?.NoChangeAspect?.Value ?? true;
+
+        return new InlineImage(
+            imported.Format,
+            name,
+            imported.Data,
+            imported.PixelWidth,
+            imported.PixelHeight,
+            width,
+            height,
+            altText,
+            lockAspectRatio);
+    }
+
+    private static InlineImage CreatePlaceholder(
+        double width,
+        double height,
+        string name,
+        string altText) =>
+        new(
+            ImageFormat.Png,
+            name,
+            ImmutableArray<byte>.Empty,
+            0,
+            0,
+            width > 0 ? width : 200,
+            height > 0 ? height : 100,
+            altText,
+            LockAspectRatio: true,
+            IsAvailable: false);
 
     private static ParagraphBlock ToParagraphBlock(
         WpParagraph paragraph,
+        MainDocumentPart mainPart,
+        Dictionary<string, ImportedImage> images,
         Action<string, string> report,
         Numbering? numbering,
         Dictionary<long, Guid> listIds)
@@ -1065,11 +1349,11 @@ public static class DocxService
                 "Hyperlink styling is not shown in this preview.");
         }
 
-        if (paragraph.Descendants<Drawing>().Any() || paragraph.Descendants<Picture>().Any())
+        if (paragraph.Descendants<Picture>().Any())
         {
             report(
                 DocxDiagnosticCodes.UnsupportedImage,
-                "Images are not shown in this preview.");
+                "Legacy or vector images are not supported and were skipped.");
         }
 
         if (paragraph.Descendants<FieldChar>().Any()
@@ -1095,6 +1379,17 @@ public static class DocxService
         {
             var properties = ToRunProperties(run.GetFirstChild<WpRunProperties>());
             var text = new StringBuilder();
+
+            void FlushText()
+            {
+                if (text.Length == 0)
+                {
+                    return;
+                }
+
+                runs.Add(new CoreRun(Guid.NewGuid(), text.ToString(), properties));
+                text.Clear();
+            }
 
             foreach (var child in run.ChildElements)
             {
@@ -1131,6 +1426,20 @@ public static class DocxService
                         break;
                     case WpRunProperties:
                         break;
+                    case WpDrawing drawing:
+                        FlushText();
+                        var image = TryCreateInlineImage(
+                            drawing,
+                            mainPart,
+                            images,
+                            report);
+
+                        if (image is not null)
+                        {
+                            runs.Add(CoreRun.CreateImage(image, properties));
+                        }
+
+                        break;
                     default:
                         report(
                             DocxDiagnosticCodes.UnsupportedRunContent,
@@ -1139,10 +1448,7 @@ public static class DocxService
                 }
             }
 
-            if (text.Length > 0)
-            {
-                runs.Add(new CoreRun(Guid.NewGuid(), text.ToString(), properties));
-            }
+            FlushText();
         }
 
         return new ParagraphBlock(

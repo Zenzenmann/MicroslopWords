@@ -86,8 +86,8 @@
             </MenuItem>
             <MenuItem Header="_Insert" IsEnabled="{Binding IsEditingEnabled}">
                 <MenuItem Header="_Table" />
-                <MenuItem Header="_Image..." />
-                <MenuItem Header="Page _Break" />
+                <MenuItem Header="_Image..." Command="{Binding InsertImageCommand}" />
+                <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
             </MenuItem>
             <MenuItem Header="_Format" IsEnabled="{Binding IsEditingEnabled}">
                 <MenuItem Header="_Bold" Command="{Binding ToggleBoldCommand}" />
@@ -106,6 +106,9 @@
                 <MenuItem Header="Decrease List L_evel" Command="{Binding DecreaseListLevelCommand}" />
                 <MenuItem Header="_Restart Numbering" Command="{Binding RestartNumberingCommand}" />
                 <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
+                <Separator />
+                <MenuItem Header="Image _Settings..." Command="{Binding EditImageCommand}" />
+                <MenuItem Header="_Remove Image" Command="{Binding RemoveImageCommand}" />
                 <Separator />
                 <MenuItem Header="Clear Character Formatting" Command="{Binding ClearCharacterFormattingCommand}" />
                 <MenuItem Header="Clear _Paragraph Formatting" Command="{Binding ClearParagraphFormattingCommand}" />
@@ -207,6 +210,15 @@
                         Content="Styles"
                         Command="{Binding ToggleStylesPanelCommand}"
                         automation:AutomationProperties.Name="Styles panel" />
+                <Button Content="Image"
+                        Command="{Binding InsertImageCommand}"
+                        IsEnabled="{Binding IsEditingEnabled}"
+                        ToolTip.Tip="Insert image"
+                        automation:AutomationProperties.Name="Insert image" />
+                <Button Content="Image settings"
+                        Command="{Binding EditImageCommand}"
+                        ToolTip.Tip="Edit the selected image"
+                        automation:AutomationProperties.Name="Image settings" />
                 <Button Content="Find" Command="{Binding FindCommand}" />
             </StackPanel>
         </Border>
