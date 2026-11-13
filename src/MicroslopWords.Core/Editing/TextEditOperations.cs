@@ -123,6 +123,32 @@ internal static class TextEditOperations
             new TextPosition(paragraph.Id, run.Id, 1, TextAffinity.Upstream));
     }
 
+    public static (Document Document, TextPosition Caret) InsertPageField(
+        Document document,
+        TextPosition caret,
+        PageFieldKind kind)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        caret = TextNavigation.Normalize(document, caret);
+
+        if (document.FindHeaderFooterZone(caret.ParagraphId) is null)
+        {
+            throw new InvalidOperationException(
+                "Page fields can only be inserted in a header or footer.");
+        }
+
+        var paragraph = document.FindParagraph(caret.ParagraphId)
+            ?? throw new InvalidOperationException("The insertion paragraph was not found.");
+        var (prefix, suffix) = SplitRuns(paragraph, caret);
+        var run = Run.CreatePageField(kind);
+        var runs = AddNonEmpty(prefix, run, suffix);
+
+        return (
+            document.ReplaceBlock(paragraph with { Runs = runs }),
+            new TextPosition(paragraph.Id, run.Id, 0));
+    }
+
     public static (Document Document, TextPosition Caret) InsertFragment(
         Document document,
         TextPosition caret,
@@ -364,25 +390,17 @@ internal static class TextEditOperations
             return (document, TextNavigation.EndOf(paragraph));
         }
 
+        var zone = document.FindHeaderFooterZone(paragraphId);
+
+        if (zone is not null && document.FindHeaderFooterZone(next.Id) == zone)
+        {
+            return MergeInZone(document, paragraph, next);
+        }
+
         if (TextNavigation.AreInSameCell(document, paragraphId, next.Id)
             && document.FindTableForParagraph(paragraphId) is not null)
         {
-            var mergedParagraph = paragraph with
-            {
-                Runs = paragraph.Runs.AddRange(next.Runs),
-            };
-            var result = document
-                .ReplaceBlock(mergedParagraph)
-                .RemoveBlock(next.Id);
-            var caretAtJoin = paragraph.Runs.Length == 0
-                ? new TextPosition(paragraph.Id, Guid.Empty, 0)
-                : new TextPosition(
-                    paragraph.Id,
-                    paragraph.Runs[^1].Id,
-                    paragraph.Runs[^1].Text.Length,
-                    TextAffinity.Upstream);
-
-            return (result, caretAtJoin);
+            return MergeInZone(document, paragraph, next);
         }
 
         if (!TryGetBlockLocation(document, next.Id, out var nextLocation))
@@ -430,6 +448,60 @@ internal static class TextEditOperations
             : MergeWithNext(document, previous.Id);
     }
 
+    private static (Document Document, TextPosition Caret) MergeInZone(
+        Document document,
+        ParagraphBlock paragraph,
+        ParagraphBlock next)
+    {
+        var mergedParagraph = paragraph with
+        {
+            Runs = paragraph.Runs.AddRange(next.Runs),
+        };
+        var result = document
+            .ReplaceBlock(mergedParagraph)
+            .RemoveBlock(next.Id);
+        var caretAtJoin = paragraph.Runs.Length == 0
+            ? new TextPosition(paragraph.Id, Guid.Empty, 0)
+            : new TextPosition(
+                paragraph.Id,
+                paragraph.Runs[^1].Id,
+                paragraph.Runs[^1].Text.Length,
+                TextAffinity.Upstream);
+
+        return (result, caretAtJoin);
+    }
+
+    private static List<ParagraphBlock> GetZoneParagraphs(
+        Document document,
+        HeaderFooterZone zone)
+    {
+        var headerFooter = document.Sections[zone.SectionIndex]
+            .GetHeaderFooter(zone.Kind, zone.Variant);
+
+        if (headerFooter is null)
+        {
+            return [];
+        }
+
+        var paragraphs = new List<ParagraphBlock>();
+
+        foreach (var block in headerFooter.Blocks)
+        {
+            if (block is ParagraphBlock paragraph)
+            {
+                paragraphs.Add(paragraph);
+            }
+            else if (block is TableBlock table)
+            {
+                paragraphs.AddRange(table.Rows
+                    .SelectMany(row => row.Cells)
+                    .SelectMany(cell => cell.Paragraphs));
+            }
+        }
+
+        return paragraphs;
+    }
+
     private static (Document Document, TextPosition Caret) DeleteInParagraph(
         Document document,
         TextPosition start,
@@ -455,7 +527,8 @@ internal static class TextEditOperations
             var text = run.Text[..Math.Clamp(start.Offset, 0, run.Text.Length)]
                 + run.Text[Math.Clamp(end.Offset, 0, run.Text.Length)..];
 
-            if (text.Length == 0 && run.EffectiveImage is not null)
+            if (text.Length == 0
+                && (run.EffectiveImage is not null || run.PageField is not null))
             {
                 var remaining = paragraph.Runs.RemoveAt(runIndex);
                 var caret = remaining.Length == 0
@@ -502,6 +575,37 @@ internal static class TextEditOperations
     {
         var startParagraph = document.FindParagraph(start.ParagraphId);
         var endParagraph = document.FindParagraph(end.ParagraphId);
+        var startZone = document.FindHeaderFooterZone(start.ParagraphId);
+        var endZone = document.FindHeaderFooterZone(end.ParagraphId);
+
+        if (startParagraph is not null
+            && endParagraph is not null
+            && startZone is not null
+            && startZone == endZone)
+        {
+            var zoneRuns = BuildPrefix(startParagraph, start)
+                .AddRange(BuildSuffix(endParagraph, end));
+            var zoneMerged = startParagraph with { Runs = zoneRuns };
+            var result = document.ReplaceBlock(zoneMerged);
+            var zoneParagraphs = GetZoneParagraphs(result, startZone.Value);
+            var startIndex = zoneParagraphs.FindIndex(paragraph =>
+                paragraph.Id == start.ParagraphId);
+            var endIndex = zoneParagraphs.FindIndex(paragraph =>
+                paragraph.Id == end.ParagraphId);
+
+            if (startIndex >= 0 && endIndex > startIndex)
+            {
+                foreach (var paragraph in zoneParagraphs
+                             .Skip(startIndex + 1)
+                             .Take(endIndex - startIndex)
+                             .ToList())
+                {
+                    result = result.RemoveBlock(paragraph.Id);
+                }
+            }
+
+            return (result, CaretAtJoin(zoneMerged, start));
+        }
 
         if (startParagraph is not null
             && endParagraph is not null
@@ -702,6 +806,10 @@ internal static class TextEditOperations
         {
             prefix.Add(SliceRun(run, 0, offset));
         }
+        else if (run.PageField is not null)
+        {
+            suffix.Add(run);
+        }
 
         if (offset < run.Text.Length)
         {
@@ -744,7 +852,9 @@ internal static class TextEditOperations
 
         foreach (var candidate in prefix)
         {
-            if (candidate.Text.Length > 0 || candidate.EffectiveImage is not null)
+            if (candidate.Text.Length > 0
+                || candidate.EffectiveImage is not null
+                || candidate.PageField is not null)
             {
                 runs.Add(candidate);
             }
@@ -754,7 +864,9 @@ internal static class TextEditOperations
 
         foreach (var candidate in suffix)
         {
-            if (candidate.Text.Length > 0 || candidate.EffectiveImage is not null)
+            if (candidate.Text.Length > 0
+                || candidate.EffectiveImage is not null
+                || candidate.PageField is not null)
             {
                 runs.Add(candidate);
             }

@@ -70,11 +70,26 @@ public sealed record TableLayout(
     ImmutableArray<TableRowLayout> Rows,
     bool ContinuesFromPreviousPage);
 
+public sealed record HeaderFooterLayout(
+    HeaderFooterKind Kind,
+    HeaderFooterVariant Variant,
+    Guid SectionId,
+    LayoutRect Bounds,
+    ImmutableArray<ParagraphLayout> Paragraphs);
+
 public sealed record PageLayout(
     int PageNumber,
     LayoutRect Bounds,
     ImmutableArray<ParagraphLayout> Paragraphs,
-    ImmutableArray<TableLayout> Tables);
+    ImmutableArray<TableLayout> Tables,
+    int SectionIndex = 0,
+    bool IsSectionFirstPage = true,
+    HeaderFooterLayout? Header = null,
+    HeaderFooterLayout? Footer = null,
+    double MarginTopPoints = 72,
+    double MarginBottomPoints = 72,
+    double MarginLeftPoints = 72,
+    double MarginRightPoints = 72);
 
 public sealed record DocumentLayout(
     ImmutableArray<PageLayout> Pages,

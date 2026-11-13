@@ -49,6 +49,16 @@ public sealed class DocumentPreviewControl : Control
     public static readonly StyledProperty<int> CurrentPageProperty =
         AvaloniaProperty.Register<DocumentPreviewControl, int>(nameof(CurrentPage), 1);
 
+    public static readonly StyledProperty<HeaderFooterKind?> ActiveHeaderFooterKindProperty =
+        AvaloniaProperty.Register<DocumentPreviewControl, HeaderFooterKind?>(
+            nameof(ActiveHeaderFooterKind));
+
+    public static readonly StyledProperty<Guid> ActiveHeaderFooterSectionIdProperty =
+        AvaloniaProperty.Register<DocumentPreviewControl, Guid>(
+            nameof(ActiveHeaderFooterSectionId));
+
+    public event EventHandler<HeaderFooterZoneEventArgs>? HeaderFooterZoneActivated;
+
     private static readonly IBrush PageBrush =
         new SolidColorBrush(Color.Parse("#FFFEFB"));
 
@@ -155,6 +165,18 @@ public sealed class DocumentPreviewControl : Control
     {
         get => GetValue(CurrentPageProperty);
         set => SetValue(CurrentPageProperty, value);
+    }
+
+    public HeaderFooterKind? ActiveHeaderFooterKind
+    {
+        get => GetValue(ActiveHeaderFooterKindProperty);
+        set => SetValue(ActiveHeaderFooterKindProperty, value);
+    }
+
+    public Guid ActiveHeaderFooterSectionId
+    {
+        get => GetValue(ActiveHeaderFooterSectionIdProperty);
+        set => SetValue(ActiveHeaderFooterSectionIdProperty, value);
     }
 
     internal string CompositionText => _compositionText;
@@ -286,6 +308,7 @@ public sealed class DocumentPreviewControl : Control
 
             using (context.PushClip(pageRect))
             {
+                DrawActiveHeaderFooterBand(context, page, pageRect, scale);
                 DrawTables(context, page, pageRect, scale);
                 DrawSearchHighlights(context, page, pageRect, scale);
                 DrawSelection(context, page, pageRect, scale);
@@ -359,6 +382,20 @@ public sealed class DocumentPreviewControl : Control
         }
 
         var pointer = e.GetPosition(this);
+
+        if (e.ClickCount == 2
+            && ActiveHeaderFooterKind is null
+            && TryGetHeaderFooterZoneAt(
+                pointer,
+                out var zoneKind,
+                out var zoneSectionId))
+        {
+            HeaderFooterZoneActivated?.Invoke(
+                this,
+                new HeaderFooterZoneEventArgs(zoneKind, zoneSectionId));
+            e.Handled = true;
+            return;
+        }
 
         if (TryGetImagePlacementAt(
             pointer,
@@ -612,11 +649,76 @@ public sealed class DocumentPreviewControl : Control
             return false;
         }
 
+        if (!IsParagraphInActiveEditingScope(paragraph.Id))
+        {
+            return false;
+        }
+
         position = TextNavigation.FromParagraphTextOffset(
             paragraph,
             hit.Value.ParagraphOffset);
 
         return true;
+    }
+
+    private bool IsParagraphInActiveEditingScope(Guid paragraphId)
+    {
+        if (Document is null)
+        {
+            return false;
+        }
+
+        var zone = Document.FindHeaderFooterZone(paragraphId);
+
+        if (ActiveHeaderFooterKind is not { } kind)
+        {
+            return zone is null;
+        }
+
+        return zone is { } activeZone
+            && activeZone.Kind == kind
+            && Document.Sections[activeZone.SectionIndex].Id
+                == ActiveHeaderFooterSectionId;
+    }
+
+    private bool TryGetHeaderFooterZoneAt(
+        Point contentPoint,
+        out HeaderFooterKind kind,
+        out Guid sectionId)
+    {
+        kind = default;
+        sectionId = default;
+
+        if (Document is null
+            || !TryGetPageAt(contentPoint, out var page, out var pageRect, out _))
+        {
+            return false;
+        }
+
+        var scale = PageViewport.PageScale(Zoom);
+        var pageY = ((contentPoint.Y - pageRect.Y) / scale) + page.Bounds.Y;
+        var section = Document.Sections.ElementAtOrDefault(page.SectionIndex);
+
+        if (section is null)
+        {
+            return false;
+        }
+
+        if (pageY < page.MarginTopPoints)
+        {
+            kind = HeaderFooterKind.Header;
+            sectionId = section.Id;
+            return true;
+        }
+
+        if (pageY > page.Bounds.Height - page.MarginBottomPoints)
+        {
+            kind = HeaderFooterKind.Footer;
+            sectionId = section.Id;
+            return true;
+        }
+
+        return false;
     }
     protected override void OnKeyDown(KeyEventArgs e)
     {
@@ -673,13 +775,13 @@ public sealed class DocumentPreviewControl : Control
                 MoveLine(1, extend);
                 return true;
             case Key.Home when command:
-                SetCaret(Selection.StartOf(Document).Focus, extend);
+                SetCaret(GetActiveScopeBoundary(start: true).Focus, extend);
                 return true;
             case Key.Home:
                 MoveToLineBoundary(start: true, extend);
                 return true;
             case Key.End when command:
-                SetCaret(Selection.EndOf(Document).Focus, extend);
+                SetCaret(GetActiveScopeBoundary(start: false).Focus, extend);
                 return true;
             case Key.End:
                 MoveToLineBoundary(start: false, extend);
@@ -880,7 +982,7 @@ public sealed class DocumentPreviewControl : Control
 
         var paragraph = Document.FindParagraph(hit.Value.Paragraph.ParagraphId);
 
-        if (paragraph is null)
+        if (paragraph is null || !IsParagraphInActiveEditingScope(paragraph.Id))
         {
             return;
         }
@@ -918,10 +1020,35 @@ public sealed class DocumentPreviewControl : Control
         }
 
         SetCaret(
-            direction < 0
-                ? Selection.StartOf(Document).Focus
-                : Selection.EndOf(Document).Focus,
+            GetActiveScopeBoundary(direction < 0).Focus,
             extend);
+    }
+
+    private Selection GetActiveScopeBoundary(bool start)
+    {
+        if (Document is null)
+        {
+            return default;
+        }
+
+        if (ActiveHeaderFooterKind is null)
+        {
+            return start ? Selection.StartOf(Document) : Selection.EndOf(Document);
+        }
+
+        var paragraphs = Document.EnumerateHeaderFooterParagraphs()
+            .Where(paragraph => IsParagraphInActiveEditingScope(paragraph.Id))
+            .ToList();
+
+        if (paragraphs.Count == 0)
+        {
+            return Selection.StartOf(Document);
+        }
+
+        return Selection.Caret(
+            start
+                ? TextNavigation.StartOf(paragraphs[0])
+                : TextNavigation.EndOf(paragraphs[^1]));
     }
 
     private void MoveToLineBoundary(bool start, bool extend)
@@ -977,6 +1104,63 @@ public sealed class DocumentPreviewControl : Control
                 paragraph,
                 position.RunId,
                 position.Offset);
+    }
+
+    private void DrawActiveHeaderFooterBand(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        if (ActiveHeaderFooterKind is not { } kind || Document is null)
+        {
+            return;
+        }
+
+        var section = Document.Sections.ElementAtOrDefault(page.SectionIndex);
+
+        if (section is null || section.Id != ActiveHeaderFooterSectionId)
+        {
+            return;
+        }
+
+        var layout = kind == HeaderFooterKind.Header ? page.Header : page.Footer;
+        Rect band;
+
+        if (layout is not null)
+        {
+            band = new Rect(
+                pageRect.X + (layout.Bounds.X * scale),
+                pageRect.Y + (layout.Bounds.Y * scale),
+                Math.Max(1, layout.Bounds.Width * scale),
+                Math.Max(1, layout.Bounds.Height * scale));
+        }
+        else
+        {
+            var top = kind == HeaderFooterKind.Header
+                ? pageRect.Y + (36 * scale)
+                : pageRect.Y + pageRect.Height - (page.MarginBottomPoints * scale);
+            var bottom = kind == HeaderFooterKind.Header
+                ? pageRect.Y + (page.MarginTopPoints * scale)
+                : pageRect.Y + pageRect.Height - (36 * scale);
+            band = new Rect(
+                pageRect.X + (page.MarginLeftPoints * scale),
+                top,
+                Math.Max(
+                    1,
+                    (page.Bounds.Width
+                        - page.MarginLeftPoints
+                        - page.MarginRightPoints) * scale),
+                Math.Max(1, bottom - top));
+        }
+
+        context.FillRectangle(
+            new SolidColorBrush(Color.Parse("#F1F6FB")),
+            band);
+        context.DrawRectangle(
+            null,
+            new Pen(new SolidColorBrush(Color.Parse("#2F6FED")), 1),
+            band);
     }
 
     private static void DrawTables(
@@ -1704,7 +1888,7 @@ public sealed class DocumentPreviewControl : Control
     }
 
     private static List<ParagraphBlock> GetDocumentParagraphs(Document document) =>
-        document.EnumerateParagraphs().ToList();
+        document.EnumerateAllParagraphs().ToList();
 
     private void DrawCaret(DrawingContext context, double scale)
     {
@@ -2094,4 +2278,13 @@ public sealed class DocumentPreviewControl : Control
 
     private static bool AreClose(double left, double right) =>
         Math.Abs(left - right) < 0.0001;
+}
+
+public sealed class HeaderFooterZoneEventArgs(
+    HeaderFooterKind kind,
+    Guid sectionId) : EventArgs
+{
+    public HeaderFooterKind Kind { get; } = kind;
+
+    public Guid SectionId { get; } = sectionId;
 }
