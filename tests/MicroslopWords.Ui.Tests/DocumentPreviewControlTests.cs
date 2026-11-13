@@ -276,6 +276,49 @@ public sealed class DocumentPreviewControlTests
                 control.Selection.Focus.Offset)
             .ShouldBe(6);
     }
+    [AvaloniaFact]
+    public void Clicking_an_image_selects_the_image_object()
+    {
+        var image = new InlineImage(
+            ImageFormat.Png,
+            "red.png",
+            [.. Convert.FromBase64String(PngBase64)],
+            100,
+            50,
+            75,
+            37.5,
+            "Red");
+        var paragraph = new ParagraphBlock(
+            Guid.NewGuid(),
+            [Run.CreateImage(image)]);
+        var document = Document.CreateEmpty() with
+        {
+            Sections =
+            [
+                Section.CreateEmpty() with
+                {
+                    Blocks = [paragraph],
+                },
+            ],
+        };
+        var control = CreateEditingControl(document, out _);
+        var layout = control.Layout!;
+        var placement = layout.Pages[0].Paragraphs.Single().Lines.Single().Images.Single();
+        var scale = PageViewport.PageScale(1);
+        var point = new Point(
+            DocumentPreviewControl.OuterMarginDips
+                + ((placement.Bounds.X + (placement.Bounds.Width / 2)) * scale),
+            DocumentPreviewControl.OuterMarginDips
+                + ((placement.Bounds.Y + (placement.Bounds.Height / 2)) * scale));
+
+        control.SelectImageAt(point).ShouldBeTrue();
+
+        var selected = ImageSelection.FindSelectedImage(document, control.Selection);
+        selected.ShouldNotBeNull();
+        selected!.Value.RunId.ShouldBe(paragraph.Runs[0].Id);
+        control.Selection.IsCollapsed.ShouldBeFalse();
+    }
+
     private static DocumentPreviewControl CreateEditingControl(
         Document document,
         out FakeEditorHost host)
@@ -307,6 +350,9 @@ public sealed class DocumentPreviewControlTests
     private static DocumentLayout CreateLayout(string text) =>
         new LayoutEngine().Layout(CreateDocument(text));
 
+    private const string PngBase64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAGQAAAAyCAIAAAAlV+npAAAAhUlEQVR4nO3SMREAIBADQUAI/qUgCwt//W6d6ib73buYOcMdYjWeFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYi15j5uMQFoB1/W+QAAAABJRU5ErkJggg==";
+
     private sealed class FakeEditorHost : ITextEditorHost
     {
         public List<string> Calls { get; } = [];
@@ -330,5 +376,13 @@ public sealed class DocumentPreviewControlTests
             Calls.Add(forward ? "next-cell" : "previous-cell");
             return false;
         }
+
+        public void ResizeImage(
+            Guid paragraphId,
+            Guid runId,
+            double widthPoints,
+            double heightPoints,
+            bool lockAspectRatio) =>
+            Calls.Add($"resize:{widthPoints}x{heightPoints}");
     }
 }

@@ -29,7 +29,13 @@ public partial class App : Application
                 new AvaloniaSaveConfirmation(window),
                 new RecoverySnapshotStore(),
                 new AvaloniaRecoveryPrompt(window),
-                new AvaloniaClipboardService(window));
+                new AvaloniaClipboardService(window),
+                new AvaloniaImageFilePicker(window),
+                new AvaloniaImageInsertDialog(window),
+                new SkiaImageDecoder())
+            {
+                ReplaceConfirmation = new AvaloniaReplaceConfirmation(window),
+            };
 
             window.DataContext = viewModel;
             window.Opened += async (_, _) => await viewModel.InitializeRecoveryAsync();

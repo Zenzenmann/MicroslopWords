@@ -38,7 +38,11 @@ public static partial class ClipboardHtml
                 }
 
                 var encoded = WebUtility.HtmlEncode(run.Text)
-                    .Replace("\n", "<br>", StringComparison.Ordinal);
+                    .Replace("\n", "<br>", StringComparison.Ordinal)
+                    .Replace(
+                        InlineImage.PlaceholderCharacter.ToString(),
+                        string.Empty,
+                        StringComparison.Ordinal);
                 builder.Append(encoded);
 
                 if (properties?.Bold == true)

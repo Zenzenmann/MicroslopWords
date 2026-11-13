@@ -1,6 +1,7 @@
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
 using MicroslopWords.Formats.Docx;
+using MicroslopWords.Rendering;
 
 namespace MicroslopWords.App.Services;
 
@@ -51,7 +52,11 @@ public sealed class DocxDocumentLoader : IDocxDocumentLoader
             {
                 stream.Position = 0;
                 var title = Path.GetFileNameWithoutExtension(path);
-                return DocxService.Load(stream, title, cancellationToken);
+                var result = DocxService.Load(stream, title, cancellationToken);
+
+                return result.IsSuccess && result.Value is not null
+                    ? AddImageDecodeDiagnostics(result)
+                    : result;
             }
 
             if (bytesRead >= CompoundFileSignature.Length
@@ -82,6 +87,43 @@ public sealed class DocxDocumentLoader : IDocxDocumentLoader
                 DocxDiagnosticCodes.FileUnreadable,
                 "The selected file is locked or cannot be read. Close it and try again.");
         }
+    }
+
+    private static OperationResult<Document> AddImageDecodeDiagnostics(
+        OperationResult<Document> result)
+    {
+        var diagnostics = result.Diagnostics.ToList();
+        var inspected = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var image in result.Value!.Sections
+                     .SelectMany(section => section.Blocks)
+                     .OfType<ParagraphBlock>()
+                     .SelectMany(paragraph => paragraph.Runs)
+                     .Select(run => run.EffectiveImage)
+                     .Where(image => image is not null && !image.IsPlaceholder)
+                     .Select(image => image!))
+        {
+            var key = Convert.ToHexString(
+                System.Security.Cryptography.SHA256.HashData(image.Data.AsSpan()));
+
+            if (!inspected.Add(key))
+            {
+                continue;
+            }
+
+            if (ImageDecoder.Validate(image.Data.ToArray()).IsSuccess)
+            {
+                continue;
+            }
+
+            diagnostics.Add(new Diagnostic(
+                DocxDiagnosticCodes.UnsupportedImage,
+                DiagnosticSeverity.Warning,
+                "An embedded image is damaged and is shown as a placeholder."));
+            break;
+        }
+
+        return OperationResult.Success(result.Value, diagnostics);
     }
 
     private static OperationResult<Document> Failure(string code, string message) =>

@@ -90,8 +90,16 @@ public sealed class DocumentRenderer
             using var font = new SKFont(_typeface, fontSize);
             var x = (float)(line.Bounds.X * scale);
             var baseline = (float)((line.Bounds.Y + line.FontSizePoints) * scale);
+            var text = line.Text.Replace(
+                Core.Documents.InlineImage.PlaceholderCharacter,
+                ' ');
 
-            canvas.DrawText(line.Text, x, baseline, font, textPaint);
+            canvas.DrawText(text, x, baseline, font, textPaint);
+
+            foreach (var image in line.Images)
+            {
+                DrawImage(canvas, image, scale, textPaint);
+            }
         }
 
         canvas.Flush();
@@ -111,5 +119,63 @@ public sealed class DocumentRenderer
         using var image = SKImage.FromBitmap(bitmap);
         using var data = image.Encode(SKEncodedImageFormat.Png, 100);
         return data.ToArray();
+    }
+
+    private void DrawImage(
+        SKCanvas canvas,
+        InlineImageLayout placement,
+        float scale,
+        SKPaint textPaint)
+    {
+        var left = (float)(placement.Bounds.X * scale);
+        var top = (float)(placement.Bounds.Y * scale);
+        var width = Math.Max(1, (float)(placement.Bounds.Width * scale));
+        var height = Math.Max(1, (float)(placement.Bounds.Height * scale));
+        var destination = new SKRect(left, top, left + width, top + height);
+
+        if (!placement.Image.IsPlaceholder)
+        {
+            using var bitmap = SKBitmap.Decode(placement.Image.Data.ToArray());
+
+            if (bitmap is not null)
+            {
+                using var image = SKImage.FromBitmap(bitmap);
+                canvas.DrawImage(image, destination);
+                return;
+            }
+        }
+
+        using var fill = new SKPaint
+        {
+            Color = new SKColor(0xF2, 0xF2, 0xF2),
+            Style = SKPaintStyle.Fill,
+            IsAntialias = true,
+        };
+        using var border = new SKPaint
+        {
+            Color = new SKColor(0x9A, 0x9A, 0x9A),
+            Style = SKPaintStyle.Stroke,
+            StrokeWidth = Math.Max(1, scale),
+            IsAntialias = true,
+        };
+
+        canvas.DrawRect(destination, fill);
+        canvas.DrawRect(destination, border);
+
+        var label = placement.Image.IsPlaceholder
+            ? "Image unavailable"
+            : placement.Image.AccessibleName;
+
+        if (string.IsNullOrWhiteSpace(label))
+        {
+            return;
+        }
+
+        using var font = new SKFont(_typeface, Math.Max(8, (float)(10 * scale)));
+        var textWidth = font.MeasureText(label, textPaint);
+        var textX = left + Math.Max(2, ((width - textWidth) / 2));
+        var textY = top + (height / 2) + (font.Size / 3);
+
+        canvas.DrawText(label, textX, textY, font, textPaint);
     }
 }

@@ -1,6 +1,7 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:controls="using:MicroslopWords.App.Controls"
+        xmlns:views="using:MicroslopWords.App.Views"
         xmlns:automation="using:Avalonia.Automation"
         xmlns:vm="using:MicroslopWords.App.ViewModels"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
@@ -52,6 +53,13 @@
         <KeyBinding Gesture="Meta+Enter" Command="{Binding InsertPageBreakCommand}" />
         <KeyBinding Gesture="Ctrl+Alt+Shift+S" Command="{Binding ToggleStylesPanelCommand}" />
         <KeyBinding Gesture="Meta+Alt+Shift+S" Command="{Binding ToggleStylesPanelCommand}" />
+        <KeyBinding Gesture="Ctrl+F" Command="{Binding FindCommand}" />
+        <KeyBinding Gesture="Meta+F" Command="{Binding FindCommand}" />
+        <KeyBinding Gesture="Ctrl+H" Command="{Binding OpenReplaceCommand}" />
+        <KeyBinding Gesture="Meta+H" Command="{Binding OpenReplaceCommand}" />
+        <KeyBinding Gesture="F3" Command="{Binding FindNextCommand}" />
+        <KeyBinding Gesture="Shift+F3" Command="{Binding FindPreviousCommand}" />
+        <KeyBinding Gesture="Escape" Command="{Binding CloseFindCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -74,6 +82,7 @@
                 <MenuItem Header="Select _All" Command="{Binding SelectAllCommand}" />
                 <Separator />
                 <MenuItem Header="_Find" Command="{Binding FindCommand}" />
+                <MenuItem Header="Find and _Replace" Command="{Binding OpenReplaceCommand}" />
             </MenuItem>
             <MenuItem Header="_Insert" IsEnabled="{Binding IsEditingEnabled}">
                 <MenuItem Header="_Table" Command="{Binding InsertTableCommand}" />
@@ -89,7 +98,7 @@
                 <MenuItem Header="_Split Cell" Command="{Binding SplitTableCellCommand}" />
                 <MenuItem Header="Toggle _Header Row" Command="{Binding ToggleTableHeaderRowCommand}" />
                 <Separator />
-                <MenuItem Header="_Image..." />
+                <MenuItem Header="_Image..." Command="{Binding InsertImageCommand}" />
                 <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
             </MenuItem>
             <MenuItem Header="_Format" IsEnabled="{Binding IsEditingEnabled}">
@@ -109,6 +118,9 @@
                 <MenuItem Header="Decrease List L_evel" Command="{Binding DecreaseListLevelCommand}" />
                 <MenuItem Header="_Restart Numbering" Command="{Binding RestartNumberingCommand}" />
                 <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
+                <Separator />
+                <MenuItem Header="Image _Settings..." Command="{Binding EditImageCommand}" />
+                <MenuItem Header="_Remove Image" Command="{Binding RemoveImageCommand}" />
                 <Separator />
                 <MenuItem Header="Clear Character Formatting" Command="{Binding ClearCharacterFormattingCommand}" />
                 <MenuItem Header="Clear _Paragraph Formatting" Command="{Binding ClearParagraphFormattingCommand}" />
@@ -210,6 +222,15 @@
                         Content="Styles"
                         Command="{Binding ToggleStylesPanelCommand}"
                         automation:AutomationProperties.Name="Styles panel" />
+                <Button Content="Image"
+                        Command="{Binding InsertImageCommand}"
+                        IsEnabled="{Binding IsEditingEnabled}"
+                        ToolTip.Tip="Insert image"
+                        automation:AutomationProperties.Name="Insert image" />
+                <Button Content="Image settings"
+                        Command="{Binding EditImageCommand}"
+                        ToolTip.Tip="Edit the selected image"
+                        automation:AutomationProperties.Name="Image settings" />
                 <Button Content="Find" Command="{Binding FindCommand}" />
             </StackPanel>
         </Border>
@@ -462,6 +483,9 @@
             </DockPanel>
         </Border>
 
+        <views:FindPanel DockPanel.Dock="Left"
+                         IsVisible="{Binding IsFindPanelOpen}" />
+
         <ScrollViewer x:Name="PageScroll"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"
@@ -470,6 +494,7 @@
                                              Layout="{Binding Layout}"
                                              Document="{Binding Document}"
                                              Selection="{Binding Selection, Mode=TwoWay}"
+                                             SearchHighlights="{Binding SearchHighlights}"
                                              IsEditable="{Binding IsEditingEnabled}"
                                              EditorHost="{Binding}"
                                              Zoom="{Binding Zoom, Mode=TwoWay}"

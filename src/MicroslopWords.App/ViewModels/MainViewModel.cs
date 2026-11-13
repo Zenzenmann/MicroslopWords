@@ -33,8 +33,13 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     private readonly TimeSpan _autosaveInterval;
     private readonly TimeProvider _timeProvider;
     private readonly IClipboardService _clipboardService;
+    private readonly IImageFilePicker _imageFilePicker;
+    private readonly IImageInsertDialog _imageInsertDialog;
+    private readonly IImageDecoder _imageDecoder;
     private readonly LayoutEngine _layoutEngine;
     private CommandHistory _history;
+    private Guid? _selectedImageParagraphId;
+    private Guid? _selectedImageRunId;
     private IReadOnlyList<Diagnostic> _documentDiagnostics = [];
     private CancellationTokenSource? _saveCancellation;
     private CancellationTokenSource? _autosaveCancellation;
@@ -136,6 +141,35 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     {
     }
 
+    public MainViewModel(
+        IDocxFilePicker filePicker,
+        IDocxDocumentLoader documentLoader,
+        LayoutEngine layoutEngine,
+        IDocxDocumentSaver documentSaver,
+        ISaveConfirmation saveConfirmation,
+        IRecoverySnapshotStore recoveryStore,
+        IRecoveryPrompt recoveryPrompt,
+        IClipboardService? clipboardService,
+        IImageFilePicker imageFilePicker,
+        IImageInsertDialog imageInsertDialog,
+        IImageDecoder imageDecoder)
+        : this(
+            filePicker,
+            documentLoader,
+            layoutEngine,
+            documentSaver,
+            saveConfirmation,
+            recoveryStore,
+            recoveryPrompt,
+            DefaultAutosaveInterval,
+            TimeProvider.System,
+            clipboardService,
+            imageFilePicker,
+            imageInsertDialog,
+            imageDecoder)
+    {
+    }
+
     internal MainViewModel(
         IDocxFilePicker filePicker,
         IDocxDocumentLoader documentLoader,
@@ -146,7 +180,10 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         IRecoveryPrompt? recoveryPrompt,
         TimeSpan autosaveInterval,
         TimeProvider timeProvider,
-        IClipboardService? clipboardService = null)
+        IClipboardService? clipboardService = null,
+        IImageFilePicker? imageFilePicker = null,
+        IImageInsertDialog? imageInsertDialog = null,
+        IImageDecoder? imageDecoder = null)
     {
         ArgumentNullException.ThrowIfNull(filePicker);
         ArgumentNullException.ThrowIfNull(documentLoader);
@@ -177,6 +214,9 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         _autosaveInterval = autosaveInterval;
         _timeProvider = timeProvider;
         _clipboardService = clipboardService ?? UnavailableClipboardService.Instance;
+        _imageFilePicker = imageFilePicker ?? new UnavailableImageFilePicker();
+        _imageInsertDialog = imageInsertDialog ?? new UnavailableImageInsertDialog();
+        _imageDecoder = imageDecoder ?? new HeaderOnlyImageDecoder();
         _history = new CommandHistory(
             Document.CreateEmpty(),
             timeProvider: _timeProvider);
@@ -242,6 +282,16 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     [ObservableProperty]
     public partial bool IsReadOnly { get; set; } = true;
+
+    [ObservableProperty]
+    public partial bool HasSelectedImage { get; set; }
+
+    [ObservableProperty]
+    public partial string SelectedImageDescription { get; set; } = string.Empty;
+
+    public bool CanEditImage => HasSelectedImage && IsEditingEnabled;
+
+    public bool CanRemoveImage => HasSelectedImage && IsEditingEnabled;
 
     [ObservableProperty]
     public partial double Zoom { get; set; } = 1.0;
@@ -660,8 +710,8 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         SetHighlight(highlight);
     }
 
-    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
-    private void Find() => StatusText = "Find is planned for STORY-011.";
+    [RelayCommand]
+    private void Find() => OpenFindPanel();
 
     public void SetFontFamily(string family) =>
         ApplyCharacterProperties(run => run with { FontFamily = family });
@@ -1417,9 +1467,271 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
             return;
         }
 
+        if (content.ImagePng is { Length: > 0 } imageData)
+        {
+            var validation = _imageDecoder.Validate(imageData);
+
+            if (!validation.IsSuccess || validation.Value is null)
+            {
+                ErrorMessage = validation.Diagnostics.FirstOrDefault()?.Message
+                    ?? "The clipboard image is damaged.";
+                return;
+            }
+
+            var page = CurrentPageSettings;
+            var natural = ImageValidation.NaturalSize(
+                validation.Value,
+                page.ContentWidthPoints,
+                page.ContentHeightPoints);
+
+            if (!TryCreateImage(
+                    imageData,
+                    "Clipboard image",
+                    natural.Width,
+                    natural.Height,
+                    lockAspectRatio: true,
+                    altText: string.Empty,
+                    page,
+                    out var image,
+                    out var error))
+            {
+                ErrorMessage = error;
+                return;
+            }
+
+            ExecuteEdit(new InsertInlineImageCommand(_history.Selection, image!));
+            ErrorMessage = string.Empty;
+            StatusText = "Pasted image.";
+            return;
+        }
+
         StatusText = content.HasImage
-            ? "Image paste is not available yet."
+            ? "Image paste failed: the clipboard image could not be read."
             : "Clipboard is empty.";
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private async Task InsertImageAsync()
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        var path = await _imageFilePicker.PickImageFileAsync();
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            StatusText = "Insert image canceled.";
+            return;
+        }
+
+        byte[] data;
+
+        try
+        {
+            var info = new FileInfo(path);
+
+            if (info.Length > ImageValidation.MaxImageBytes)
+            {
+                ErrorMessage = "Images must be 50 MB or smaller.";
+                return;
+            }
+
+            data = await File.ReadAllBytesAsync(path);
+        }
+        catch (Exception exception) when (
+            exception is IOException
+                or UnauthorizedAccessException
+                or NotSupportedException)
+        {
+            ErrorMessage = "The image file could not be read.";
+            return;
+        }
+
+        var validation = _imageDecoder.Validate(data);
+
+        if (!validation.IsSuccess || validation.Value is null)
+        {
+            ErrorMessage = validation.Diagnostics.FirstOrDefault()?.Message
+                ?? "The image file is damaged or unsupported.";
+            return;
+        }
+
+        var page = CurrentPageSettings;
+        var natural = ImageValidation.NaturalSize(
+            validation.Value,
+            page.ContentWidthPoints,
+            page.ContentHeightPoints);
+        var request = new ImageDialogRequest(
+            Path.GetFileName(path),
+            data,
+            validation.Value.PixelWidth,
+            validation.Value.PixelHeight,
+            natural.Width,
+            natural.Height,
+            LockAspectRatio: true,
+            AltText: string.Empty,
+            page.ContentWidthPoints,
+            page.ContentHeightPoints);
+        var options = await _imageInsertDialog.ShowAsync(request);
+
+        if (options is null)
+        {
+            StatusText = "Insert image canceled.";
+            return;
+        }
+
+        if (!TryCreateImage(
+                data,
+                Path.GetFileName(path),
+                options.WidthPoints,
+                options.HeightPoints,
+                options.LockAspectRatio,
+                options.AltText,
+                page,
+                out var image,
+                out var error))
+        {
+            ErrorMessage = error;
+            return;
+        }
+
+        ExecuteEdit(new InsertInlineImageCommand(_history.Selection, image!));
+        ErrorMessage = string.Empty;
+        StatusText = "Inserted image.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditImage))]
+    private async Task EditImageAsync()
+    {
+        if (!TryGetSelectedImage(out var paragraphId, out var runId, out var image))
+        {
+            return;
+        }
+
+        var page = CurrentPageSettings;
+        var request = new ImageDialogRequest(
+            image.FileName,
+            image.Data.ToArray(),
+            image.PixelWidth,
+            image.PixelHeight,
+            image.WidthPoints,
+            image.HeightPoints,
+            image.LockAspectRatio,
+            image.AltText,
+            page.ContentWidthPoints,
+            page.ContentHeightPoints);
+        var options = await _imageInsertDialog.ShowAsync(request);
+
+        if (options is null)
+        {
+            StatusText = "Image edit canceled.";
+            return;
+        }
+
+        ExecuteEdit(new UpdateInlineImageCommand(
+            _history.Selection,
+            paragraphId,
+            runId,
+            options.WidthPoints,
+            options.HeightPoints,
+            options.LockAspectRatio,
+            options.AltText));
+        StatusText = "Image updated.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveImage))]
+    private void RemoveImage()
+    {
+        if (TryGetSelectedImage(out var paragraphId, out var runId, out _))
+        {
+            ExecuteEdit(new DeleteInlineImageCommand(
+                _history.Selection,
+                paragraphId,
+                runId));
+            StatusText = "Image removed.";
+        }
+    }
+
+    public void ResizeImage(
+        Guid paragraphId,
+        Guid runId,
+        double widthPoints,
+        double heightPoints,
+        bool lockAspectRatio) =>
+        ExecuteEdit(new ResizeInlineImageCommand(
+            _history.Selection,
+            paragraphId,
+            runId,
+            widthPoints,
+            heightPoints,
+            lockAspectRatio));
+
+    private PageSettings CurrentPageSettings =>
+        Document.Sections.FirstOrDefault()?.EffectivePage ?? PageSettings.Letter;
+
+    private bool TryGetSelectedImage(
+        out Guid paragraphId,
+        out Guid runId,
+        out InlineImage image)
+    {
+        paragraphId = Guid.Empty;
+        runId = Guid.Empty;
+        image = null!;
+
+        if (_selectedImageParagraphId is not { } selectedParagraph
+            || _selectedImageRunId is not { } selectedRun)
+        {
+            return false;
+        }
+
+        var paragraph = Document.FindParagraph(selectedParagraph);
+        var runIndex = paragraph is null
+            ? -1
+            : TextNavigation.FindRunIndex(paragraph, selectedRun);
+
+        if (paragraph is null
+            || runIndex < 0
+            || paragraph.Runs[runIndex].EffectiveImage is not { } selectedImage)
+        {
+            return false;
+        }
+
+        paragraphId = selectedParagraph;
+        runId = selectedRun;
+        image = selectedImage;
+        return true;
+    }
+
+    private static bool TryCreateImage(
+        byte[] data,
+        string fileName,
+        double widthPoints,
+        double heightPoints,
+        bool lockAspectRatio,
+        string altText,
+        PageSettings page,
+        out InlineImage? image,
+        out string error)
+    {
+        var result = ImageValidation.Create(
+            data,
+            fileName,
+            altText,
+            widthPoints,
+            heightPoints,
+            lockAspectRatio,
+            page.ContentWidthPoints,
+            page.ContentHeightPoints);
+
+        image = result.Value;
+        error = result.IsSuccess
+            ? string.Empty
+            : result.Diagnostics.FirstOrDefault()?.Message
+                ?? "The image could not be inserted.";
+
+        return result.IsSuccess && image is not null;
     }
 
     [RelayCommand(CanExecute = nameof(CanSelectAll))]
@@ -1590,6 +1902,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         RefreshCharacterFormattingState();
         RefreshParagraphFormattingState();
         RefreshStyleState();
+        RefreshImageState();
     }
 
     private void SyncSelectionFromHistory()
@@ -1606,6 +1919,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         }
 
         NotifyClipboardCommands();
+        RefreshImageState();
     }
 
     private void NotifyHistoryCommands()
@@ -1680,6 +1994,13 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         ApplyStyle(value);
     }
 
+    partial void OnHasSelectedImageChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanEditImage));
+        OnPropertyChanged(nameof(CanRemoveImage));
+        EditImageCommand.NotifyCanExecuteChanged();
+        RemoveImageCommand.NotifyCanExecuteChanged();
+    }
 
     partial void OnSelectionChanged(Selection value)
     {
@@ -1705,6 +2026,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         RefreshCharacterFormattingState();
         RefreshParagraphFormattingState();
         RefreshStyleState();
+        RefreshImageState();
     }
 
     partial void OnIsReadOnlyChanged(bool value) => NotifyEditingEnabledChanged();
@@ -1780,6 +2102,11 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         ApplyTableColumnWidthCommand.NotifyCanExecuteChanged();
         ApplyTableWidthCommand.NotifyCanExecuteChanged();
         FindCommand.NotifyCanExecuteChanged();
+        InsertImageCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanEditImage));
+        OnPropertyChanged(nameof(CanRemoveImage));
+        EditImageCommand.NotifyCanExecuteChanged();
+        RemoveImageCommand.NotifyCanExecuteChanged();
         NotifyClipboardCommands();
     }
 
@@ -2555,6 +2882,28 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         {
             _updatingStyles = false;
         }
+    }
+
+    private void RefreshImageState()
+    {
+        var selected = ImageSelection.FindSelectedImage(Document, _history.Selection);
+
+        if (selected is null)
+        {
+            _selectedImageParagraphId = null;
+            _selectedImageRunId = null;
+            HasSelectedImage = false;
+            SelectedImageDescription = string.Empty;
+            return;
+        }
+
+        _selectedImageParagraphId = selected.Value.ParagraphId;
+        _selectedImageRunId = selected.Value.RunId;
+        HasSelectedImage = true;
+        SelectedImageDescription =
+            $"{selected.Value.Image.AccessibleName} - "
+            + $"{selected.Value.Image.WidthPoints:0.#} x "
+            + $"{selected.Value.Image.HeightPoints:0.#} pt";
     }
 
     private void RefreshParagraphFormattingState()

@@ -46,6 +46,18 @@ internal static class TextEditOperations
         }
 
         var target = paragraph.Runs[runIndex];
+
+        if (target.EffectiveImage is not null)
+        {
+            var (prefix, suffix) = SplitRuns(paragraph, position);
+            var inserted = new Run(Guid.NewGuid(), text, target.Properties);
+            var runs = AddNonEmpty(prefix, inserted, suffix);
+
+            return (
+                document.ReplaceBlock(paragraph with { Runs = runs }),
+                new TextPosition(paragraph.Id, inserted.Id, text.Length));
+        }
+
         var updatedRun = target with { Text = target.Text.Insert(position.Offset, text) };
         var update = paragraph.Runs.SetItem(runIndex, updatedRun);
 
@@ -91,6 +103,26 @@ internal static class TextEditOperations
             document.ReplaceBlock(paragraph with { Runs = runs }),
             new TextPosition(paragraph.Id, run.Id, text.Length));
     }
+    public static (Document Document, TextPosition Caret) InsertInlineImage(
+        Document document,
+        TextPosition position,
+        InlineImage image)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        ArgumentNullException.ThrowIfNull(image);
+
+        position = TextNavigation.Normalize(document, position);
+        var paragraph = document.FindParagraph(position.ParagraphId)
+            ?? throw new InvalidOperationException("The insertion paragraph was not found.");
+        var (prefix, suffix) = SplitRuns(paragraph, position);
+        var run = Run.CreateImage(image);
+        var runs = AddNonEmpty(prefix, run, suffix);
+
+        return (
+            document.ReplaceBlock(paragraph with { Runs = runs }),
+            new TextPosition(paragraph.Id, run.Id, 1, TextAffinity.Upstream));
+    }
+
     public static (Document Document, TextPosition Caret) InsertFragment(
         Document document,
         TextPosition caret,
@@ -265,6 +297,20 @@ internal static class TextEditOperations
                 found = true;
                 offset = Math.Clamp(offset, 0, run.Text.Length);
 
+                if (run.EffectiveImage is not null)
+                {
+                    if (offset == 0)
+                    {
+                        secondRuns.Add(run);
+                    }
+                    else
+                    {
+                        firstRuns.Add(run);
+                    }
+
+                    continue;
+                }
+
                 firstRuns.Add(run with { Text = run.Text[..offset] });
                 secondRuns.Add(run with
                 {
@@ -408,7 +454,32 @@ internal static class TextEditOperations
             var run = paragraph.Runs[runIndex];
             var text = run.Text[..Math.Clamp(start.Offset, 0, run.Text.Length)]
                 + run.Text[Math.Clamp(end.Offset, 0, run.Text.Length)..];
-            var updated = paragraph.Runs.SetItem(runIndex, run with { Text = text });
+
+            if (text.Length == 0 && run.EffectiveImage is not null)
+            {
+                var remaining = paragraph.Runs.RemoveAt(runIndex);
+                var caret = remaining.Length == 0
+                    ? new TextPosition(paragraph.Id, Guid.Empty, 0)
+                    : runIndex < remaining.Length
+                        ? new TextPosition(paragraph.Id, remaining[runIndex].Id, 0)
+                        : new TextPosition(
+                            paragraph.Id,
+                            remaining[^1].Id,
+                            remaining[^1].Text.Length,
+                            TextAffinity.Upstream);
+
+                return (
+                    document.ReplaceBlock(paragraph with { Runs = remaining }),
+                    caret);
+            }
+
+            var updated = paragraph.Runs.SetItem(
+                runIndex,
+                run with
+                {
+                    Text = text,
+                    Image = text == run.Text ? run.Image : null,
+                });
 
             return (
                 document.ReplaceBlock(paragraph with { Runs = updated }),
@@ -511,10 +582,13 @@ internal static class TextEditOperations
         {
             if (run.Id == start.RunId)
             {
-                runs.Add(run with
+                var offset = Math.Clamp(start.Offset, 0, run.Text.Length);
+
+                if (offset > 0)
                 {
-                    Text = run.Text[..Math.Clamp(start.Offset, 0, run.Text.Length)],
-                });
+                    runs.Add(SliceRun(run, 0, offset));
+                }
+
                 break;
             }
 
@@ -536,10 +610,13 @@ internal static class TextEditOperations
             if (!found && run.Id == end.RunId)
             {
                 found = true;
-                runs.Add(run with
+                var offset = Math.Clamp(end.Offset, 0, run.Text.Length);
+
+                if (offset < run.Text.Length)
                 {
-                    Text = run.Text[Math.Clamp(end.Offset, 0, run.Text.Length)..],
-                });
+                    runs.Add(SliceRun(run, offset, run.Text.Length));
+                }
+
                 continue;
             }
 
@@ -621,8 +698,17 @@ internal static class TextEditOperations
             prefix.Add(paragraph.Runs[index]);
         }
 
-        prefix.Add(run with { Text = run.Text[..offset] });
-        suffix.Add(new Run(Guid.NewGuid(), run.Text[offset..], run.Properties));
+        if (offset > 0)
+        {
+            prefix.Add(SliceRun(run, 0, offset));
+        }
+
+        if (offset < run.Text.Length)
+        {
+            suffix.Add(run.Image is not null
+                ? run
+                : new Run(Guid.NewGuid(), run.Text[offset..], run.Properties));
+        }
 
         for (var index = runIndex + 1; index < paragraph.Runs.Length; index++)
         {
@@ -633,7 +719,49 @@ internal static class TextEditOperations
     }
 
     private static Run CloneRun(RunFragment fragment) =>
-        new(Guid.NewGuid(), fragment.Text, fragment.Properties);
+        new(Guid.NewGuid(), fragment.Text, fragment.Properties, fragment.Image);
+
+    private static Run SliceRun(Run run, int from, int to)
+    {
+        var text = run.Text[from..to];
+        var keepsImage = run.EffectiveImage is not null
+            && from == 0
+            && to == run.Text.Length;
+
+        return run with
+        {
+            Text = text,
+            Image = keepsImage ? run.Image : null,
+        };
+    }
+
+    private static ImmutableArray<Run> AddNonEmpty(
+        ImmutableArray<Run> prefix,
+        Run run,
+        ImmutableArray<Run> suffix)
+    {
+        var runs = ImmutableArray.CreateBuilder<Run>(prefix.Length + 1 + suffix.Length);
+
+        foreach (var candidate in prefix)
+        {
+            if (candidate.Text.Length > 0 || candidate.EffectiveImage is not null)
+            {
+                runs.Add(candidate);
+            }
+        }
+
+        runs.Add(run);
+
+        foreach (var candidate in suffix)
+        {
+            if (candidate.Text.Length > 0 || candidate.EffectiveImage is not null)
+            {
+                runs.Add(candidate);
+            }
+        }
+
+        return runs.ToImmutable();
+    }
 
     private static TextPosition CaretAfterInserted(
         ParagraphBlock paragraph,

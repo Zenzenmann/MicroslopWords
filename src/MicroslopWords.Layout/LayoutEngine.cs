@@ -117,7 +117,8 @@ public sealed class LayoutEngine
                     shaper,
                     styleSheet,
                     diagnostics,
-                    listLabels);
+                    listLabels,
+                    contentHeight);
                 measuredRows[index] = measured;
                 rowHeights[index] = measured.Bounds.Height;
             }
@@ -342,7 +343,9 @@ public sealed class LayoutEngine
                         diagnostics,
                         defaultFont,
                         defaultProperties.FontSizePoints,
-                        styleSheet);
+                        styleSheet,
+                        wrapWidth,
+                        contentHeight);
                     var lines = WrapStyledText(
                         segment.Text,
                         segment.Start,
@@ -355,7 +358,9 @@ public sealed class LayoutEngine
                     for (var lineIndex = 0; lineIndex < lines.Length; lineIndex++)
                     {
                         var line = lines[lineIndex];
-                        var lineHeight = line.FontSizePoints * properties.LineSpacing;
+                        var lineHeight = Math.Max(
+                            line.FontSizePoints * properties.LineSpacing,
+                            line.ImageHeightPoints);
 
                         if (cursorY + lineHeight > pageBottom
                             && (paragraphs.Count > 0 || paragraphLines.Count > 0))
@@ -386,6 +391,22 @@ public sealed class LayoutEngine
                             maxLineWidth,
                             (lineX - baseLeft) + line.AdvanceWidthPoints);
 
+                        var images = ImmutableArray.CreateBuilder<InlineImageLayout>(
+                            line.Images.Length);
+
+                        foreach (var image in line.Images)
+                        {
+                            images.Add(new InlineImageLayout(
+                                image.RunId,
+                                image.TextStart,
+                                new LayoutRect(
+                                    lineX + image.X,
+                                    cursorY + lineHeight - image.HeightPoints,
+                                    image.WidthPoints,
+                                    image.HeightPoints),
+                                image.Image));
+                        }
+
                         paragraphLines.Add(new LineLayout(
                             line.Text,
                             line.TextStart,
@@ -398,7 +419,8 @@ public sealed class LayoutEngine
                             line.FontSizePoints,
                             line.Clusters,
                             line.ResolvedFont,
-                            line.Spans));
+                            line.Spans,
+                            images.ToImmutable()));
                         cursorY += lineHeight;
                     }
 
@@ -469,7 +491,9 @@ public sealed class LayoutEngine
         ImmutableArray<Diagnostic>.Builder diagnostics,
         FontKey defaultFont,
         double defaultFontSize,
-        StyleSheet styleSheet)
+        StyleSheet styleSheet,
+        double maxWidth,
+        double maxHeight)
     {
         var segmentEnd = segmentStart + segmentLength;
         var clusters = ImmutableArray.CreateBuilder<StyledCluster>();
@@ -491,6 +515,33 @@ public sealed class LayoutEngine
 
             var properties = StyleResolver.ResolveRun(run, paragraph, styleSheet);
             var font = ResolveFontRequest(properties);
+
+            if (run.EffectiveImage is { } image)
+            {
+                // Images are atomic: they are never shaped or split across
+                // segments, and their displayed size is capped to the line.
+                if (from != runStart || to != runEnd)
+                {
+                    continue;
+                }
+
+                var (width, height) = ImageValidation.FitSize(
+                    image.WidthPoints,
+                    image.HeightPoints,
+                    maxWidth,
+                    maxHeight);
+                clusters.Add(new StyledCluster(
+                    runStart,
+                    run.Text.Length,
+                    width,
+                    font,
+                    properties,
+                    image,
+                    height,
+                    run.Id));
+                continue;
+            }
+
             var text = run.Text[(from - runStart)..(to - runStart)];
             var shaped = shaper.Shape(text, font, properties.FontSizePoints);
 
@@ -511,7 +562,8 @@ public sealed class LayoutEngine
                     cluster.TextLength,
                     cluster.Advance,
                     displayFont,
-                    properties));
+                    properties,
+                    RunId: run.Id));
             }
         }
 
@@ -550,7 +602,8 @@ public sealed class LayoutEngine
         TextShaper shaper,
         StyleSheet styleSheet,
         ImmutableArray<Diagnostic>.Builder diagnostics,
-        IReadOnlyDictionary<Guid, string> listLabels)
+        IReadOnlyDictionary<Guid, string> listLabels,
+        double maxHeight)
     {
         var cells = ImmutableArray.CreateBuilder<TableCellLayout>();
         var gridColumn = 0;
@@ -571,7 +624,8 @@ public sealed class LayoutEngine
                     shaper,
                     styleSheet,
                     diagnostics,
-                    listLabels);
+                    listLabels,
+                    maxHeight);
                 var contentBottom = paragraphs.Length == 0
                     ? 0
                     : paragraphs.Max(item => item.Bounds.Bottom);
@@ -608,7 +662,8 @@ public sealed class LayoutEngine
         TextShaper shaper,
         StyleSheet styleSheet,
         ImmutableArray<Diagnostic>.Builder diagnostics,
-        IReadOnlyDictionary<Guid, string> listLabels)
+        IReadOnlyDictionary<Guid, string> listLabels,
+        double maxHeight)
     {
         var paragraphs = ImmutableArray.CreateBuilder<ParagraphLayout>();
         var y = TableCellPaddingPoints;
@@ -658,7 +713,9 @@ public sealed class LayoutEngine
                     diagnostics,
                     defaultFont,
                     defaultProperties.FontSizePoints,
-                    styleSheet);
+                    styleSheet,
+                    wrapWidth,
+                    maxHeight);
                 var wrapped = WrapStyledText(
                     segment.Text,
                     segment.Start,
@@ -690,6 +747,23 @@ public sealed class LayoutEngine
                     }
 
                     lineX = Math.Max(cellX + TableCellPaddingPoints, lineX);
+
+                    var images = ImmutableArray.CreateBuilder<InlineImageLayout>(
+                        line.Images.Length);
+
+                    foreach (var image in line.Images)
+                    {
+                        images.Add(new InlineImageLayout(
+                            image.RunId,
+                            image.TextStart,
+                            new LayoutRect(
+                                lineX + image.X,
+                                y + lineHeight - image.HeightPoints,
+                                image.WidthPoints,
+                                image.HeightPoints),
+                            image.Image));
+                    }
+
                     lines.Add(new LineLayout(
                         line.Text,
                         line.TextStart,
@@ -702,7 +776,8 @@ public sealed class LayoutEngine
                         line.FontSizePoints,
                         line.Clusters,
                         line.ResolvedFont,
-                        line.Spans));
+                        line.Spans,
+                        images.ToImmutable()));
                     y += lineHeight;
                 }
 
@@ -805,7 +880,9 @@ public sealed class LayoutEngine
                     defaultFontSize,
                     defaultFont,
                     ImmutableArray<GlyphCluster>.Empty,
-                    ImmutableArray<LineSpan>.Empty),
+                    ImmutableArray<LineSpan>.Empty,
+                    ImmutableArray<StyledImage>.Empty,
+                    0),
             ];
         }
 
@@ -922,23 +999,50 @@ public sealed class LayoutEngine
 
         var builtClusters = ImmutableArray.CreateBuilder<GlyphCluster>(count);
         var spans = ImmutableArray.CreateBuilder<LineSpan>();
+        var images = ImmutableArray.CreateBuilder<StyledImage>();
         var spanStartCluster = startCluster;
         var spanX = 0d;
+        var imageX = 0d;
+        var maxImageHeight = 0d;
 
         for (var index = startCluster; index <= endCluster; index++)
         {
+            var cluster = clusters[index];
+            var advance = advances[index - startCluster];
             builtClusters.Add(new GlyphCluster(
-                clusters[index].TextStart,
-                clusters[index].TextLength,
-                advances[index - startCluster]));
+                cluster.TextStart,
+                cluster.TextLength,
+                advance));
+
+            if (cluster.Image is { } image)
+            {
+                images.Add(new StyledImage(
+                    cluster.RunId,
+                    cluster.TextStart,
+                    imageX,
+                    advance,
+                    cluster.ImageHeightPoints,
+                    image));
+                maxImageHeight = Math.Max(maxImageHeight, cluster.ImageHeightPoints);
+            }
+
+            imageX += advance;
         }
 
         while (spanStartCluster <= endCluster)
         {
+            if (clusters[spanStartCluster].Image is not null)
+            {
+                spanX += advances[spanStartCluster - startCluster];
+                spanStartCluster++;
+                continue;
+            }
+
             var spanEndCluster = spanStartCluster;
             var spanWidth = advances[spanStartCluster - startCluster];
 
             while (spanEndCluster + 1 <= endCluster
+                && clusters[spanEndCluster + 1].Image is null
                 && SameStyle(clusters[spanEndCluster], clusters[spanEndCluster + 1]))
             {
                 spanEndCluster++;
@@ -972,7 +1076,9 @@ public sealed class LayoutEngine
             maxFontSize <= 0 ? clusters[startCluster].Properties.FontSizePoints : maxFontSize,
             clusters[startCluster].Font,
             builtClusters.ToImmutable(),
-            spans.ToImmutable());
+            spans.ToImmutable(),
+            images.ToImmutable(),
+            maxImageHeight);
     }
     private static bool IsWhitespaceAt(
         string segmentText,
@@ -990,7 +1096,7 @@ public sealed class LayoutEngine
         string segmentText,
         int segmentStart,
         StyledCluster cluster) =>
-        IsWhitespaceAt(segmentText, segmentStart, cluster);
+        cluster.Image is not null || IsWhitespaceAt(segmentText, segmentStart, cluster);
 
     private static bool SameStyle(StyledCluster left, StyledCluster right) =>
         left.Font == right.Font
@@ -1119,12 +1225,23 @@ public sealed class LayoutEngine
         int TextLength,
         double Advance,
         FontKey Font,
-        RunProperties Properties);
+        RunProperties Properties,
+        InlineImage? Image = null,
+        double ImageHeightPoints = 0,
+        Guid RunId = default);
 
     private readonly record struct ShapedSegment(
         ImmutableArray<StyledCluster> Clusters,
         FontKey DefaultFont,
         double DefaultFontSize);
+
+    private readonly record struct StyledImage(
+        Guid RunId,
+        int TextStart,
+        double X,
+        double WidthPoints,
+        double HeightPoints,
+        InlineImage Image);
 
     private readonly record struct StyledLine(
         string Text,
@@ -1133,5 +1250,7 @@ public sealed class LayoutEngine
         double FontSizePoints,
         FontKey ResolvedFont,
         ImmutableArray<GlyphCluster> Clusters,
-        ImmutableArray<LineSpan> Spans);
+        ImmutableArray<LineSpan> Spans,
+        ImmutableArray<StyledImage> Images,
+        double ImageHeightPoints);
 }

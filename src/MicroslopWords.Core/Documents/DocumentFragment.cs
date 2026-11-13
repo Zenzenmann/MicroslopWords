@@ -3,13 +3,22 @@ using MicroslopWords.Core.Editing;
 
 namespace MicroslopWords.Core.Documents;
 
-public sealed record RunFragment(string Text, RunProperties? Properties);
+public sealed record RunFragment(
+    string Text,
+    RunProperties? Properties,
+    InlineImage? Image = null)
+{
+    public string PlainText =>
+        Image is null
+            ? Text
+            : Text.Replace(InlineImage.PlaceholderCharacter.ToString(), string.Empty, StringComparison.Ordinal);
+}
 
 public sealed record ParagraphFragment(
     ParagraphProperties? Properties,
     ImmutableArray<RunFragment> Runs)
 {
-    public string PlainText => string.Concat(Runs.Select(run => run.Text));
+    public string PlainText => string.Concat(Runs.Select(run => run.PlainText));
 }
 
 public sealed record DocumentFragment(ImmutableArray<ParagraphFragment> Paragraphs)
@@ -139,9 +148,17 @@ public sealed record DocumentFragment(ImmutableArray<ParagraphFragment> Paragrap
 
             if (to > from || (startRunId is null && !finished))
             {
+                var capturedText = run.Text[from..to];
+                var capturedImage = run.Image is not null
+                    && from == 0
+                    && to == run.Text.Length
+                        ? run.Image
+                        : null;
+
                 runs.Add(new RunFragment(
-                    run.Text[from..to],
-                    run.Properties));
+                    capturedText,
+                    run.Properties,
+                    capturedImage));
             }
 
         }

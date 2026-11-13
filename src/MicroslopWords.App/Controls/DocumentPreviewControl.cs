@@ -4,6 +4,7 @@ using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Input.TextInput;
 using Avalonia.Media;
+using Avalonia.Media.Imaging;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
 using MicroslopWords.Core.Documents;
@@ -28,6 +29,10 @@ public sealed class DocumentPreviewControl : Control
             nameof(Selection),
             default,
             defaultBindingMode: Avalonia.Data.BindingMode.TwoWay);
+
+    public static readonly StyledProperty<IReadOnlyList<Selection>?> SearchHighlightsProperty =
+        AvaloniaProperty.Register<DocumentPreviewControl, IReadOnlyList<Selection>?>(
+            nameof(SearchHighlights));
 
     public static readonly StyledProperty<bool> IsEditableProperty =
         AvaloniaProperty.Register<DocumentPreviewControl, bool>(nameof(IsEditable));
@@ -56,6 +61,9 @@ public sealed class DocumentPreviewControl : Control
     private static readonly IBrush SelectionBrush =
         new SolidColorBrush(Color.Parse("#CFE3F5"));
 
+    private static readonly IBrush SearchHighlightBrush =
+        new SolidColorBrush(Color.Parse("#FFF0B3"));
+
     private static readonly IBrush CaretBrush =
         new SolidColorBrush(Color.Parse("#1B1F24"));
 
@@ -71,7 +79,22 @@ public sealed class DocumentPreviewControl : Control
     private static readonly IBrush PageBreakBrush =
         new SolidColorBrush(Color.Parse("#B26B00"));
 
+    private static readonly IBrush PlaceholderFill =
+        new SolidColorBrush(Color.Parse("#F2F2F2"));
+
+    private static readonly Pen PlaceholderBorder =
+        new(new SolidColorBrush(Color.Parse("#9A9A9A")), 1);
+
+    private static readonly Pen ImageSelectionPen =
+        new(new SolidColorBrush(Color.Parse("#0B5CAD")), 2);
+
+    private static readonly IBrush ImageHandleFill =
+        new SolidColorBrush(Colors.White);
+
+    private readonly Dictionary<InlineImage, Bitmap?> _imageCache = [];
     private readonly DocumentTextInputMethodClient _imeClient;
+    private ImageResizeState? _imageResize;
+    private ImageResizePreview? _imageResizePreview;
     private ScrollViewer? _scrollViewer;
     private Vector? _pendingScrollOffset;
     private double? _pointerAnchorX;
@@ -102,6 +125,12 @@ public sealed class DocumentPreviewControl : Control
     {
         get => GetValue(SelectionProperty);
         set => SetValue(SelectionProperty, value);
+    }
+
+    public IReadOnlyList<Selection>? SearchHighlights
+    {
+        get => GetValue(SearchHighlightsProperty);
+        set => SetValue(SearchHighlightsProperty, value);
     }
 
     public bool IsEditable
@@ -181,6 +210,10 @@ public sealed class DocumentPreviewControl : Control
             InvalidateVisual();
             RequestEnsureCaretVisible();
         }
+        else if (change.Property == SearchHighlightsProperty)
+        {
+            InvalidateVisual();
+        }
         else if (change.Property == IsEditableProperty && !IsEditable)
         {
             _compositionText = string.Empty;
@@ -254,6 +287,7 @@ public sealed class DocumentPreviewControl : Control
             using (context.PushClip(pageRect))
             {
                 DrawTables(context, page, pageRect, scale);
+                DrawSearchHighlights(context, page, pageRect, scale);
                 DrawSelection(context, page, pageRect, scale);
                 DrawListLabels(context, page, pageRect, scale);
 
@@ -263,6 +297,8 @@ public sealed class DocumentPreviewControl : Control
                     DrawLine(context, line, pageRect, scale);
                 }
 
+                DrawImageSelection(context, page, pageRect, scale);
+                DrawImageResizePreview(context);
                 DrawPageBreaks(context, layout, page, pageRect, scale);
             }
 
@@ -317,8 +353,38 @@ public sealed class DocumentPreviewControl : Control
 
         Focus();
 
-        if (Document is null || Layout is null
-            || !TryGetTextPosition(e.GetPosition(this), out var position))
+        if (Document is null || Layout is null)
+        {
+            return;
+        }
+
+        var pointer = e.GetPosition(this);
+
+        if (TryGetImagePlacementAt(
+            pointer,
+            out var imageParagraphId,
+            out var imagePlacement,
+            out var imagePage,
+            out var imagePageRect))
+        {
+            if (TryStartImageResize(
+                pointer,
+                imageParagraphId,
+                imagePlacement,
+                imagePage,
+                imagePageRect))
+            {
+                e.Pointer.Capture(this);
+            }
+
+            Selection = new Selection(
+                new TextPosition(imageParagraphId, imagePlacement.RunId, 0),
+                new TextPosition(imageParagraphId, imagePlacement.RunId, 1));
+            e.Handled = true;
+            return;
+        }
+
+        if (!TryGetTextPosition(e.GetPosition(this), out var position))
         {
             return;
         }
@@ -345,6 +411,14 @@ public sealed class DocumentPreviewControl : Control
     {
         base.OnPointerMoved(e);
 
+        if (_imageResize is { } resize
+            && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
+        {
+            UpdateImageResize(resize, e.GetPosition(this));
+            e.Handled = true;
+            return;
+        }
+
         if (_isSelecting
             && e.GetCurrentPoint(this).Properties.IsLeftButtonPressed)
         {
@@ -354,7 +428,24 @@ public sealed class DocumentPreviewControl : Control
 
     protected override void OnPointerReleased(PointerReleasedEventArgs e)
     {
-        if (_isSelecting)
+        if (_imageResize is { } resize)
+        {
+            var preview = _imageResizePreview;
+            _imageResize = null;
+            _imageResizePreview = null;
+            e.Pointer.Capture(null);
+
+            if (preview is { } result)
+            {
+                EditorHost?.ResizeImage(
+                    resize.ParagraphId,
+                    resize.RunId,
+                    result.WidthPoints,
+                    result.HeightPoints,
+                    resize.LockAspectRatio);
+            }
+        }
+        else if (_isSelecting)
         {
             _isSelecting = false;
             e.Pointer.Capture(null);
@@ -392,6 +483,86 @@ public sealed class DocumentPreviewControl : Control
         }
 
         SetCaret(position, extend);
+        return true;
+    }
+
+    private bool TryGetImageAt(
+        Point contentPoint,
+        out (Guid ParagraphId, Guid RunId) image)
+    {
+        if (TryGetImagePlacementAt(
+            contentPoint,
+            out var paragraphId,
+            out var placement,
+            out _,
+            out _))
+        {
+            image = (paragraphId, placement.RunId);
+            return true;
+        }
+
+        image = default;
+        return false;
+    }
+
+    private bool TryGetImagePlacementAt(
+        Point contentPoint,
+        out Guid paragraphId,
+        out InlineImageLayout placement,
+        out PageLayout page,
+        out Rect pageRect)
+    {
+        paragraphId = Guid.Empty;
+        placement = null!;
+        page = null!;
+        pageRect = default;
+
+        if (Layout is null
+            || !TryGetPageAt(contentPoint, out var hitPage, out var hitRect, out _))
+        {
+            return false;
+        }
+
+        var scale = PageViewport.PageScale(Zoom);
+        var pageX = ((contentPoint.X - hitRect.X) / scale) + hitPage.Bounds.X;
+        var pageY = ((contentPoint.Y - hitRect.Y) / scale) + hitPage.Bounds.Y;
+
+        foreach (var paragraph in hitPage.Paragraphs)
+        {
+            foreach (var line in paragraph.Lines)
+            {
+                foreach (var candidate in line.Images)
+                {
+                    var bounds = candidate.Bounds;
+
+                    if (pageX >= bounds.X
+                        && pageX <= bounds.Right
+                        && pageY >= bounds.Y
+                        && pageY <= bounds.Bottom)
+                    {
+                        paragraphId = paragraph.ParagraphId;
+                        placement = candidate;
+                        page = hitPage;
+                        pageRect = hitRect;
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    internal bool SelectImageAt(Point contentPoint)
+    {
+        if (!TryGetImageAt(contentPoint, out var image))
+        {
+            return false;
+        }
+
+        Selection = new Selection(
+            new TextPosition(image.ParagraphId, image.RunId, 0),
+            new TextPosition(image.ParagraphId, image.RunId, 1));
         return true;
     }
 
@@ -946,7 +1117,7 @@ public sealed class DocumentPreviewControl : Control
         }
     }
 
-    private static void DrawLine(
+    private void DrawLine(
         DrawingContext context,
         LineLayout line,
         Rect pageRect,
@@ -957,11 +1128,15 @@ public sealed class DocumentPreviewControl : Control
             return;
         }
 
-        if (line.Spans.Length == 0)
+        var visibleText = line.Text.Replace(
+            InlineImage.PlaceholderCharacter,
+            ' ');
+
+        if (line.Spans.Length == 0 && !string.IsNullOrWhiteSpace(visibleText))
         {
             DrawSpan(
                 context,
-                line.Text,
+                visibleText,
                 line.ResolvedFont,
                 line.FontSizePoints,
                 line.Bounds.Width,
@@ -973,34 +1148,349 @@ public sealed class DocumentPreviewControl : Control
                 line,
                 xOffset: 0,
                 scale);
+        }
+        else
+        {
+            foreach (var span in line.Spans)
+            {
+                if (span.TextLength <= 0
+                    || span.TextStart < 0
+                    || span.TextStart + span.TextLength > line.Text.Length)
+                {
+                    continue;
+                }
+
+                DrawSpan(
+                    context,
+                    line.Text.Substring(span.TextStart, span.TextLength)
+                        .Replace(InlineImage.PlaceholderCharacter, ' '),
+                    span.Font,
+                    span.FontSizePoints,
+                    span.Width,
+                    span.ColorHex,
+                    span.HighlightHex,
+                    span.Underline,
+                    span.Strikethrough,
+                    pageRect,
+                    line,
+                    span.X,
+                    scale);
+            }
+        }
+
+        foreach (var image in line.Images)
+        {
+            DrawImage(context, image, pageRect, scale);
+        }
+    }
+
+    private void DrawImage(
+        DrawingContext context,
+        InlineImageLayout placement,
+        Rect pageRect,
+        double scale)
+    {
+        var rect = new Rect(
+            pageRect.X + (placement.Bounds.X * scale),
+            pageRect.Y + (placement.Bounds.Y * scale),
+            Math.Max(1, placement.Bounds.Width * scale),
+            Math.Max(1, placement.Bounds.Height * scale));
+
+        if (!placement.Image.IsPlaceholder)
+        {
+            var bitmap = GetImageBitmap(placement.Image);
+
+            if (bitmap is not null)
+            {
+                context.DrawImage(bitmap, rect);
+                return;
+            }
+        }
+
+        context.FillRectangle(PlaceholderFill, rect);
+        context.DrawRectangle(null, PlaceholderBorder, rect);
+
+        var label = placement.Image.IsPlaceholder
+            ? "Image unavailable"
+            : placement.Image.AccessibleName;
+
+        if (string.IsNullOrWhiteSpace(label))
+        {
             return;
         }
 
-        foreach (var span in line.Spans)
+        var formatted = new FormattedText(
+            label,
+            CultureInfo.InvariantCulture,
+            FlowDirection.LeftToRight,
+            Typeface.Default,
+            Math.Max(9, 11 * scale),
+            TextBrush)
         {
-            if (span.TextLength <= 0
-                || span.TextStart < 0
-                || span.TextStart + span.TextLength > line.Text.Length)
-            {
-                continue;
-            }
+            MaxTextWidth = Math.Max(1, rect.Width - 8),
+            MaxTextHeight = Math.Max(1, rect.Height - 8),
+            Trimming = TextTrimming.CharacterEllipsis,
+        };
 
-            DrawSpan(
-                context,
-                line.Text.Substring(span.TextStart, span.TextLength),
-                span.Font,
-                span.FontSizePoints,
-                span.Width,
-                span.ColorHex,
-                span.HighlightHex,
-                span.Underline,
-                span.Strikethrough,
-                pageRect,
-                line,
-                span.X,
-                scale);
+        context.DrawText(formatted, new Point(rect.X + 4, rect.Y + 4));
+    }
+
+    private Bitmap? GetImageBitmap(InlineImage image)
+    {
+        if (_imageCache.TryGetValue(image, out var cached))
+        {
+            return cached;
+        }
+
+        Bitmap? bitmap = null;
+
+        try
+        {
+            using var stream = new MemoryStream(image.Data.ToArray(), writable: false);
+            bitmap = new Bitmap(stream);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or InvalidOperationException or IOException)
+        {
+            bitmap = null;
+        }
+
+        _imageCache[image] = bitmap;
+        return bitmap;
+    }
+
+    private void DrawImageSelection(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        if (Document is null)
+        {
+            return;
+        }
+
+        var selected = ImageSelection.FindSelectedImage(Document, Selection);
+
+        if (selected is null)
+        {
+            return;
+        }
+
+        foreach (var paragraph in page.Paragraphs)
+        {
+            foreach (var line in paragraph.Lines)
+            {
+                foreach (var placement in line.Images)
+                {
+                    if (placement.RunId != selected.Value.RunId)
+                    {
+                        continue;
+                    }
+
+                    var rect = new Rect(
+                        pageRect.X + (placement.Bounds.X * scale),
+                        pageRect.Y + (placement.Bounds.Y * scale),
+                        Math.Max(1, placement.Bounds.Width * scale),
+                        Math.Max(1, placement.Bounds.Height * scale));
+                    context.DrawRectangle(null, ImageSelectionPen, rect);
+
+                    const double handleSize = 7;
+                    var half = handleSize / 2;
+
+                    foreach (var point in new[]
+                    {
+                        rect.TopLeft,
+                        rect.TopRight,
+                        rect.BottomLeft,
+                        rect.BottomRight,
+                    })
+                    {
+                        var handle = new Rect(
+                            point.X - half,
+                            point.Y - half,
+                            handleSize,
+                            handleSize);
+                        context.FillRectangle(ImageHandleFill, handle);
+                        context.DrawRectangle(null, ImageSelectionPen, handle);
+                    }
+
+                    return;
+                }
+            }
         }
     }
+
+    private bool TryStartImageResize(
+        Point point,
+        Guid paragraphId,
+        InlineImageLayout placement,
+        PageLayout page,
+        Rect pageRect)
+    {
+        if (!IsEditable || Document is null)
+        {
+            return false;
+        }
+
+        var selected = ImageSelection.FindSelectedImage(Document, Selection);
+
+        if (selected is null || selected.Value.RunId != placement.RunId)
+        {
+            return false;
+        }
+
+        var scale = PageViewport.PageScale(Zoom);
+        var rect = ToScreenRect(placement.Bounds, pageRect, scale);
+
+        foreach (var (corner, position) in new[]
+        {
+            (ResizeCorner.TopLeft, rect.TopLeft),
+            (ResizeCorner.TopRight, rect.TopRight),
+            (ResizeCorner.BottomLeft, rect.BottomLeft),
+            (ResizeCorner.BottomRight, rect.BottomRight),
+        })
+        {
+            if (Math.Abs(point.X - position.X) <= 8
+                && Math.Abs(point.Y - position.Y) <= 8)
+            {
+                _imageResize = new ImageResizeState(
+                    paragraphId,
+                    placement.RunId,
+                    placement,
+                    page,
+                    pageRect,
+                    point,
+                    corner,
+                    placement.Image.LockAspectRatio,
+                    placement.Image.AspectRatio);
+                _imageResizePreview = new ImageResizePreview(
+                    _imageResize.Value,
+                    rect,
+                    placement.Image.WidthPoints,
+                    placement.Image.HeightPoints);
+                InvalidateVisual();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void UpdateImageResize(ImageResizeState state, Point point)
+    {
+        var scale = PageViewport.PageScale(Zoom);
+        var dx = (point.X - state.StartPoint.X) / scale;
+        var dy = (point.Y - state.StartPoint.Y) / scale;
+        var original = state.Placement.Bounds;
+        var width = original.Width;
+        var height = original.Height;
+
+        switch (state.Corner)
+        {
+            case ResizeCorner.TopLeft:
+                width = original.Width - dx;
+                height = original.Height - dy;
+                break;
+            case ResizeCorner.TopRight:
+                width = original.Width + dx;
+                height = original.Height - dy;
+                break;
+            case ResizeCorner.BottomLeft:
+                width = original.Width - dx;
+                height = original.Height + dy;
+                break;
+            default:
+                width = original.Width + dx;
+                height = original.Height + dy;
+                break;
+        }
+
+        var page = Document?.Sections.FirstOrDefault()?.EffectivePage
+            ?? PageSettings.Letter;
+        var maxWidth = page.ContentWidthPoints;
+        var maxHeight = page.ContentHeightPoints;
+        width = Math.Clamp(width, 1, maxWidth);
+
+        if (state.LockAspectRatio && state.AspectRatio > 0)
+        {
+            height = width / state.AspectRatio;
+
+            if (height > maxHeight)
+            {
+                height = maxHeight;
+                width = height * state.AspectRatio;
+            }
+        }
+        else
+        {
+            height = Math.Clamp(height, 1, maxHeight);
+        }
+
+        var x = state.Corner is ResizeCorner.TopLeft or ResizeCorner.BottomLeft
+            ? original.Right - width
+            : original.X;
+        var y = state.Corner is ResizeCorner.TopLeft or ResizeCorner.TopRight
+            ? original.Bottom - height
+            : original.Y;
+        var modelRect = new LayoutRect(x, y, width, height);
+        var screenRect = ToScreenRect(modelRect, state.PageRect, scale);
+
+        _imageResizePreview = new ImageResizePreview(
+            state,
+            screenRect,
+            width,
+            height);
+        InvalidateVisual();
+    }
+
+    private void DrawImageResizePreview(DrawingContext context)
+    {
+        if (_imageResizePreview is not { } preview)
+        {
+            return;
+        }
+
+        context.DrawRectangle(
+            new SolidColorBrush(Color.Parse("#EAF3FF")) { Opacity = 0.25 },
+            ImageSelectionPen,
+            preview.Rect);
+    }
+
+    private static Rect ToScreenRect(
+        LayoutRect bounds,
+        Rect pageRect,
+        double scale) =>
+        new(
+            pageRect.X + (bounds.X * scale),
+            pageRect.Y + (bounds.Y * scale),
+            Math.Max(1, bounds.Width * scale),
+            Math.Max(1, bounds.Height * scale));
+
+    private enum ResizeCorner
+    {
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight,
+    }
+
+    private readonly record struct ImageResizeState(
+        Guid ParagraphId,
+        Guid RunId,
+        InlineImageLayout Placement,
+        PageLayout Page,
+        Rect PageRect,
+        Point StartPoint,
+        ResizeCorner Corner,
+        bool LockAspectRatio,
+        double AspectRatio);
+
+    private readonly record struct ImageResizePreview(
+        ImageResizeState State,
+        Rect Rect,
+        double WidthPoints,
+        double HeightPoints);
 
     private static void DrawSpan(
         DrawingContext context,
@@ -1080,27 +1570,89 @@ public sealed class DocumentPreviewControl : Control
         }
     }
 
+    private void DrawSearchHighlights(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        var document = Document;
+
+        if (document is null
+            || Layout is null
+            || SearchHighlights is not { Count: > 0 } highlights)
+        {
+            return;
+        }
+
+        var paragraphs = GetDocumentParagraphs(document);
+
+        foreach (var highlight in highlights)
+        {
+            var selection = SelectionMap.Normalize(highlight, document);
+
+            if (!selection.IsCollapsed)
+            {
+                DrawRange(
+                    context,
+                    page,
+                    pageRect,
+                    scale,
+                    paragraphs,
+                    selection,
+                    SearchHighlightBrush);
+            }
+        }
+    }
+
     private void DrawSelection(
         DrawingContext context,
         PageLayout page,
         Rect pageRect,
         double scale)
     {
-        if (Document is null || Layout is null)
+        var document = Document;
+
+        if (document is null || Layout is null)
         {
             return;
         }
 
-        var selection = SelectionMap.Normalize(Selection, Document);
+        var selection = SelectionMap.Normalize(Selection, document);
 
         if (selection.IsCollapsed)
         {
             return;
         }
 
-        var paragraphs = Document.EnumerateParagraphs().ToList();
-        var start = selection.GetStart(Document);
-        var end = selection.GetEnd(Document);
+        DrawRange(
+            context,
+            page,
+            pageRect,
+            scale,
+            GetDocumentParagraphs(document),
+            selection,
+            SelectionBrush);
+    }
+
+    private void DrawRange(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale,
+        List<ParagraphBlock> paragraphs,
+        Selection selection,
+        IBrush brush)
+    {
+        var document = Document;
+
+        if (document is null)
+        {
+            return;
+        }
+
+        var start = selection.GetStart(document);
+        var end = selection.GetEnd(document);
         var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
         var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
 
@@ -1146,10 +1698,13 @@ public sealed class DocumentPreviewControl : Control
                     Math.Max(1, (right - x) * scale),
                     line.Bounds.Height * scale);
 
-                context.FillRectangle(SelectionBrush, rect);
+                context.FillRectangle(brush, rect);
             }
         }
     }
+
+    private static List<ParagraphBlock> GetDocumentParagraphs(Document document) =>
+        document.EnumerateParagraphs().ToList();
 
     private void DrawCaret(DrawingContext context, double scale)
     {
