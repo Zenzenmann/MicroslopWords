@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using MicroslopWords.Core.Documents;
+using MicroslopWords.Core.Styles;
 
 namespace MicroslopWords.Core.Editing;
 
@@ -25,6 +26,29 @@ public sealed class FormatSelectionCommand(
             document,
             current,
             transform);
+
+        selectionAfter = mapped;
+        return result;
+    }
+}
+
+public sealed class ClearCharacterFormattingCommand(Selection selection) : DocumentEditCommand
+{
+    public override string Description => "Clear character formatting";
+
+    protected override Document ApplyCore(
+        Document document,
+        out Selection selectionAfter)
+    {
+        var current = SelectionMap.Normalize(selection, document);
+
+        if (current.IsCollapsed)
+        {
+            selectionAfter = current;
+            return document;
+        }
+
+        var (result, mapped) = CharacterFormatting.Apply(document, current, _ => null);
 
         selectionAfter = mapped;
         return result;
@@ -133,10 +157,10 @@ internal static class CharacterFormatting
             var from = Math.Max(selectionStart, runStart) - runStart;
             var to = Math.Min(selectionEnd, runEnd) - runStart;
 
+            var properties = CreateDirect(run, paragraph, document.EffectiveStyles, transform);
+
             if (from == 0 && to == run.Text.Length)
             {
-                var properties = Normalize(run, transform(run.EffectiveProperties));
-
                 if (!Equals(properties, run.Properties))
                 {
                     changed = true;
@@ -156,7 +180,7 @@ internal static class CharacterFormatting
                 runs.Add(new Run(
                     Guid.NewGuid(),
                     run.Text[from..to],
-                    Normalize(run, transform(run.EffectiveProperties))));
+                    properties));
 
                 if (to < run.Text.Length)
                 {
@@ -173,10 +197,39 @@ internal static class CharacterFormatting
         return changed ? paragraph with { Runs = runs.ToImmutable() } : paragraph;
     }
 
-    private static RunProperties? Normalize(Run source, RunProperties? properties) =>
-        source.Properties is null && properties == RunProperties.Default
-            ? null
-            : properties;
+    private static RunProperties? CreateDirect(
+        Run run,
+        ParagraphBlock paragraph,
+        StyleSheet styleSheet,
+        Func<RunProperties, RunProperties?> transform)
+    {
+        var effective = StyleResolver.ResolveRun(run, paragraph, styleSheet);
+        var transformed = transform(effective);
+        var styleId = run.Properties?.StyleId;
+
+        if (transformed is null)
+        {
+            return string.IsNullOrWhiteSpace(styleId)
+                ? null
+                : new RunProperties { StyleId = styleId };
+        }
+
+        if (!string.Equals(transformed.StyleId, effective.StyleId, StringComparison.Ordinal))
+        {
+            return new RunProperties { StyleId = transformed.StyleId };
+        }
+
+        if (Equals(transformed, effective))
+        {
+            return run.Properties;
+        }
+
+        var current = run.Properties ?? new RunProperties();
+        var direct = StyleResolver.MergeOverrides(current, effective, transformed);
+
+        return direct with { StyleId = current.StyleId };
+    }
+
     private static int IndexOf(Document document, Guid paragraphId)
     {
         var index = 0;

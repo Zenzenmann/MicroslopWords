@@ -50,6 +50,8 @@
         <KeyBinding Gesture="Meta+Shift+X" Command="{Binding ToggleStrikethroughCommand}" />
         <KeyBinding Gesture="Ctrl+Enter" Command="{Binding InsertPageBreakCommand}" />
         <KeyBinding Gesture="Meta+Enter" Command="{Binding InsertPageBreakCommand}" />
+        <KeyBinding Gesture="Ctrl+Alt+Shift+S" Command="{Binding ToggleStylesPanelCommand}" />
+        <KeyBinding Gesture="Meta+Alt+Shift+S" Command="{Binding ToggleStylesPanelCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -98,6 +100,8 @@
                 <Separator />
                 <MenuItem Header="Clear Character Formatting" Command="{Binding ClearCharacterFormattingCommand}" />
                 <MenuItem Header="Clear _Paragraph Formatting" Command="{Binding ClearParagraphFormattingCommand}" />
+                <Separator />
+                <MenuItem Header="_Styles" Command="{Binding ToggleStylesPanelCommand}" />
             </MenuItem>
             <MenuItem Header="_View">
                 <MenuItem Header="Zoom _In" Command="{Binding ZoomInCommand}" />
@@ -106,6 +110,8 @@
                 <Separator />
                 <MenuItem Header="Fit _Width" Command="{Binding FitWidthCommand}" />
                 <MenuItem Header="Fit _Page" Command="{Binding FitPageCommand}" />
+                <Separator />
+                <MenuItem Header="_Styles" Command="{Binding ToggleStylesPanelCommand}" />
             </MenuItem>
             <MenuItem Header="_Help">
                 <MenuItem Header="_About MicroslopWords" />
@@ -188,6 +194,10 @@
                     <Button Content="Clear" Command="{Binding ClearCharacterFormattingCommand}" ToolTip.Tip="Clear character formatting" />
                 </StackPanel>
                 <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="6,0" />
+                <Button x:Name="StylesPanelButton"
+                        Content="Styles"
+                        Command="{Binding ToggleStylesPanelCommand}"
+                        automation:AutomationProperties.Name="Styles panel" />
                 <Button Content="Find" Command="{Binding FindCommand}" />
             </StackPanel>
         </Border>
@@ -195,6 +205,23 @@
         <Border DockPanel.Dock="Top" Background="#F9F9F9" BorderBrush="#D8D8D8" BorderThickness="0,0,0,1" Padding="10,6">
             <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
                 <StackPanel Orientation="Horizontal" Spacing="4" IsEnabled="{Binding IsEditingEnabled}">
+                    <ComboBox x:Name="StylePicker"
+                              Width="150"
+                              ItemsSource="{Binding StyleItems}"
+                              SelectedItem="{Binding SelectedStyle, Mode=TwoWay}"
+                              automation:AutomationProperties.Name="Paragraph style">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate x:DataType="vm:StyleListItem">
+                                <TextBlock Text="{Binding Name}" />
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                    <TextBlock Text="Mixed"
+                               FontSize="11"
+                               Foreground="#666666"
+                               VerticalAlignment="Center"
+                               IsVisible="{Binding IsStyleMixed}" />
+                    <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
                     <Button Content="Left" Command="{Binding AlignLeftCommand}" ToolTip.Tip="Align left" automation:AutomationProperties.Name="Align left" />
                     <Button x:Name="AlignCenterButton" Content="Center" Command="{Binding AlignCenterCommand}" ToolTip.Tip="Align center" automation:AutomationProperties.Name="Align center" />
                     <Button Content="Right" Command="{Binding AlignRightCommand}" ToolTip.Tip="Align right" automation:AutomationProperties.Name="Align right" />
@@ -315,6 +342,90 @@
                     <Button Content="Fit" Command="{Binding FitWidthCommand}" Height="24" Padding="8,0" />
                 </StackPanel>
             </Grid>
+        </Border>
+
+        <Border x:Name="StylesPanel"
+                DockPanel.Dock="Right"
+                Width="264"
+                Background="#F7F7F7"
+                BorderBrush="#D8D8D8"
+                BorderThickness="1,0,0,0"
+                Padding="12"
+                IsVisible="{Binding IsStylesPanelOpen}">
+            <DockPanel>
+                <StackPanel DockPanel.Dock="Top" Spacing="4">
+                    <TextBlock Text="Styles" FontWeight="SemiBold" FontSize="13" />
+                    <TextBlock Text="{Binding CurrentParagraphStyleName}"
+                               FontSize="12"
+                               Foreground="#333333" />
+                    <TextBlock Text="{Binding CurrentCharacterStyleName}"
+                               FontSize="11"
+                               Foreground="#666666" />
+                    <TextBlock Text="Mixed"
+                               FontSize="11"
+                               Foreground="#666666"
+                               IsVisible="{Binding IsStyleMixed}" />
+                </StackPanel>
+
+                <StackPanel DockPanel.Dock="Bottom" Spacing="6">
+                    <StackPanel Spacing="4" IsVisible="{Binding IsStyleEditorOpen}">
+                        <TextBox Text="{Binding StyleEditorName, Mode=TwoWay}"
+                                 automation:AutomationProperties.Name="Style name" />
+                        <ComboBox ItemsSource="{Binding StyleKinds}"
+                                  SelectedItem="{Binding StyleEditorKind, Mode=TwoWay}"
+                                  IsEnabled="{Binding IsStyleKindEditable}"
+                                  automation:AutomationProperties.Name="Style kind" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <Button Content="Save" Command="{Binding SaveStyleCommand}" />
+                            <Button Content="Cancel" Command="{Binding CancelStyleEditorCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Spacing="4" IsVisible="{Binding IsStyleDeleteConfirmationOpen}">
+                        <TextBlock Text="{Binding StyleDeletePrompt}"
+                                   FontSize="11"
+                                   TextWrapping="Wrap" />
+                        <StackPanel Orientation="Horizontal" Spacing="4">
+                            <Button Content="Delete" Command="{Binding ConfirmDeleteStyleCommand}" />
+                            <Button Content="Cancel" Command="{Binding CancelDeleteStyleCommand}" />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="4" IsEnabled="{Binding IsEditingEnabled}">
+                        <Button Content="New" Command="{Binding NewStyleCommand}" />
+                        <Button Content="Modify" Command="{Binding ModifyStyleCommand}" />
+                        <Button Content="Delete" Command="{Binding DeleteStyleCommand}" />
+                    </StackPanel>
+                    <Button Content="Update from selection"
+                            Command="{Binding UpdateStyleFromSelectionCommand}"
+                            IsEnabled="{Binding IsEditingEnabled}"
+                            automation:AutomationProperties.Name="Update style from selection" />
+                </StackPanel>
+
+                <ListBox x:Name="StyleList"
+                         ItemsSource="{Binding StyleItems}"
+                         SelectedItem="{Binding SelectedStyle, Mode=TwoWay}"
+                         IsEnabled="{Binding IsEditingEnabled}"
+                         automation:AutomationProperties.Name="Document styles">
+                    <ListBox.ItemTemplate>
+                        <DataTemplate x:DataType="vm:StyleListItem">
+                            <Grid ColumnDefinitions="36,*" ColumnSpacing="6">
+                                <TextBlock Text="Aa"
+                                           FontSize="{Binding PreviewDisplaySize}"
+                                           FontWeight="{Binding PreviewWeight}"
+                                           FontStyle="{Binding PreviewStyle}"
+                                           VerticalAlignment="Center" />
+                                <StackPanel Grid.Column="1" Spacing="1">
+                                    <TextBlock Text="{Binding Name}" FontSize="13" />
+                                    <TextBlock Text="{Binding PreviewDescription}"
+                                               FontSize="10"
+                                               Foreground="#666666" />
+                                </StackPanel>
+                            </Grid>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </DockPanel>
         </Border>
 
         <ScrollViewer x:Name="PageScroll"

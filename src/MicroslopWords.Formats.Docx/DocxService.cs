@@ -6,6 +6,7 @@ using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
+using MicroslopWords.Core.Styles;
 using CoreDocument = MicroslopWords.Core.Documents.Document;
 using CoreParagraphProperties = MicroslopWords.Core.Documents.ParagraphProperties;
 using CoreRun = MicroslopWords.Core.Documents.Run;
@@ -15,6 +16,7 @@ using WpParagraph = DocumentFormat.OpenXml.Wordprocessing.Paragraph;
 using WpParagraphProperties = DocumentFormat.OpenXml.Wordprocessing.ParagraphProperties;
 using WpRun = DocumentFormat.OpenXml.Wordprocessing.Run;
 using WpRunProperties = DocumentFormat.OpenXml.Wordprocessing.RunProperties;
+using WpStyle = DocumentFormat.OpenXml.Wordprocessing.Style;
 using WpText = DocumentFormat.OpenXml.Wordprocessing.Text;
 
 namespace MicroslopWords.Formats.Docx;
@@ -62,6 +64,7 @@ public static class DocxService
                     "Headers and footers are not shown in this preview.");
             }
 
+            var styleSheet = LoadStyles(mainPart, Report);
             var blocks = ImmutableArray.CreateBuilder<Block>();
             var numbering = mainPart.NumberingDefinitionsPart?.Numbering;
             var listIds = new Dictionary<long, Guid>();
@@ -104,7 +107,8 @@ public static class DocxService
             var document = new CoreDocument(
                 Guid.NewGuid(),
                 title ?? "Imported document",
-                ImmutableArray.Create(section));
+                ImmutableArray.Create(section),
+                styleSheet);
 
             return OperationResult.Success(document, diagnostics.ToImmutable());
         }
@@ -133,6 +137,7 @@ public static class DocxService
         mainPart.Document = new WpDocument();
         var body = new Body();
         mainPart.Document.Append(body);
+        SaveStyles(mainPart, document.EffectiveStyles);
 
         var numberingIds = PrepareNumbering(mainPart, document);
 
@@ -191,7 +196,7 @@ public static class DocxService
                      .SelectMany(section => section.Blocks)
                      .OfType<ParagraphBlock>())
         {
-            var properties = paragraph.EffectiveProperties;
+            var properties = StyleResolver.ResolveParagraph(paragraph, document.EffectiveStyles);
 
             if (properties.ListKind == ListKind.None)
             {
@@ -331,8 +336,13 @@ public static class DocxService
     {
         var wordProperties = new WpParagraphProperties();
         var hasContent = false;
+        var hasStyle = !string.IsNullOrWhiteSpace(properties.StyleId);
 
-        if (properties.Alignment != ParagraphAlignment.Left)
+        bool Writes(ParagraphPropertyOverrides flag) =>
+            !hasStyle || properties.Overrides.HasFlag(flag);
+
+        if (Writes(ParagraphPropertyOverrides.Alignment)
+            && properties.Alignment != ParagraphAlignment.Left)
         {
             wordProperties.Append(new Justification
             {
@@ -347,45 +357,81 @@ public static class DocxService
             hasContent = true;
         }
 
-        if (properties.SpaceBeforePoints != 0
-            || properties.SpaceAfterPoints != 8
-            || Math.Abs(properties.LineSpacing - 1.15) > 0.0001)
+        var writeBefore = Writes(ParagraphPropertyOverrides.SpaceBefore);
+        var writeAfter = Writes(ParagraphPropertyOverrides.SpaceAfter);
+        var writeLine = Writes(ParagraphPropertyOverrides.LineSpacing);
+        var writeSpacing = hasStyle
+            ? writeBefore || writeAfter || writeLine
+            : properties.SpaceBeforePoints != 0
+                || properties.SpaceAfterPoints != 8
+                || Math.Abs(properties.LineSpacing - 1.15) > 0.0001;
+
+        if (writeSpacing)
         {
-            wordProperties.Append(new SpacingBetweenLines
+            var spacing = new SpacingBetweenLines();
+
+            if (writeBefore)
             {
-                Before = ToTwips(properties.SpaceBeforePoints),
-                After = ToTwips(properties.SpaceAfterPoints),
-                Line = ((int)Math.Round(properties.LineSpacing * 240))
-                    .ToString(CultureInfo.InvariantCulture),
-                LineRule = LineSpacingRuleValues.Auto,
-            });
+                spacing.Before = ToTwips(properties.SpaceBeforePoints);
+            }
+
+            if (writeAfter)
+            {
+                spacing.After = ToTwips(properties.SpaceAfterPoints);
+            }
+
+            if (writeLine)
+            {
+                spacing.Line = ((int)Math.Round(properties.LineSpacing * 240))
+                    .ToString(CultureInfo.InvariantCulture);
+                spacing.LineRule = LineSpacingRuleValues.Auto;
+            }
+
+            wordProperties.Append(spacing);
             hasContent = true;
         }
 
-        if (properties.LeftIndentPoints != 0
-            || properties.RightIndentPoints != 0
-            || properties.FirstLineIndentPoints != 0)
-        {
-            var indentation = new Indentation
-            {
-                Left = ToTwips(properties.LeftIndentPoints),
-                Right = ToTwips(properties.RightIndentPoints),
-            };
+        var writeLeft = Writes(ParagraphPropertyOverrides.LeftIndent);
+        var writeRight = Writes(ParagraphPropertyOverrides.RightIndent);
+        var writeFirstLine = Writes(ParagraphPropertyOverrides.FirstLineIndent);
+        var writeIndent = hasStyle
+            ? writeLeft || writeRight || writeFirstLine
+            : properties.LeftIndentPoints != 0
+                || properties.RightIndentPoints != 0
+                || properties.FirstLineIndentPoints != 0;
 
-            if (properties.FirstLineIndentPoints >= 0)
+        if (writeIndent)
+        {
+            var indentation = new Indentation();
+
+            if (writeLeft)
             {
-                indentation.FirstLine = ToTwips(properties.FirstLineIndentPoints);
+                indentation.Left = ToTwips(properties.LeftIndentPoints);
             }
-            else
+
+            if (writeRight)
             {
-                indentation.Hanging = ToTwips(-properties.FirstLineIndentPoints);
+                indentation.Right = ToTwips(properties.RightIndentPoints);
+            }
+
+            if (writeFirstLine)
+            {
+                if (properties.FirstLineIndentPoints >= 0)
+                {
+                    indentation.FirstLine = ToTwips(properties.FirstLineIndentPoints);
+                }
+                else
+                {
+                    indentation.Hanging = ToTwips(-properties.FirstLineIndentPoints);
+                }
             }
 
             wordProperties.Append(indentation);
             hasContent = true;
         }
 
-        if (properties.ListKind != ListKind.None)
+        if (properties.ListKind != ListKind.None
+            && Writes(ParagraphPropertyOverrides.List))
         {
             var key = properties.ListId ?? paragraphId;
 
@@ -457,40 +503,85 @@ public static class DocxService
                 Bottom = (int)Math.Round(page.MarginBottomPoints * 20),
             });
 
-    private static CoreRunProperties? ToRunProperties(WpRunProperties? properties)
-    {
-        if (properties is null)
-        {
-            return null;
-        }
+    private static CoreRunProperties? ToRunProperties(WpRunProperties? properties) =>
+        properties is null
+            ? null
+            : ParseRunProperties(
+                properties,
+                properties.GetFirstChild<RunStyle>()?.Val?.Value);
 
-        var fonts = properties.RunFonts;
+    private static CoreRunProperties? ParseRunProperties(
+        OpenXmlElement properties,
+        string? styleId)
+    {
+        var fonts = properties.GetFirstChild<RunFonts>();
         var family = fonts?.Ascii?.Value
             ?? fonts?.HighAnsi?.Value
             ?? fonts?.ComplexScript?.Value
             ?? fonts?.EastAsia?.Value;
-        var halfPoints = ParseHalfPoints(properties.FontSize?.Val?.Value)
-            ?? ParseHalfPoints(properties.FontSizeComplexScript?.Val?.Value);
-        var bold = properties.Bold is not null
-            && (properties.Bold.Val?.Value ?? true);
-        var italic = properties.Italic is not null
-            && (properties.Italic.Val?.Value ?? true);
-        var underline = properties.Underline is not null
-            && properties.Underline.Val?.Value != UnderlineValues.None;
-        var strikethrough = properties.Strike is not null
-            && (properties.Strike.Val?.Value ?? true);
-        var color = NormalizeHex(properties.Color?.Val?.Value);
-        var highlight = HighlightToHex(properties.Highlight?.Val?.InnerText)
-            ?? NormalizeHex(properties.Shading?.Fill?.Value);
+        var halfPoints = ParseHalfPoints(
+                properties.GetFirstChild<FontSize>()?.Val?.Value)
+            ?? ParseHalfPoints(
+                properties.GetFirstChild<FontSizeComplexScript>()?.Val?.Value);
+        var boldElement = properties.GetFirstChild<Bold>();
+        var italicElement = properties.GetFirstChild<Italic>();
+        var underlineElement = properties.GetFirstChild<Underline>();
+        var strikeElement = properties.GetFirstChild<Strike>();
+        var colorElement = properties.GetFirstChild<Color>();
+        var highlightElement = properties.GetFirstChild<Highlight>();
+        var shadingElement = properties.GetFirstChild<Shading>();
+        var bold = boldElement is not null && (boldElement.Val?.Value ?? true);
+        var italic = italicElement is not null && (italicElement.Val?.Value ?? true);
+        var underline = underlineElement is not null
+            && underlineElement.Val?.Value != UnderlineValues.None;
+        var strikethrough = strikeElement is not null
+            && (strikeElement.Val?.Value ?? true);
+        var color = NormalizeHex(colorElement?.Val?.Value);
+        var highlight = HighlightToHex(highlightElement?.Val?.InnerText)
+            ?? NormalizeHex(shadingElement?.Fill?.Value);
+        var overrides = RunPropertyOverrides.None;
 
-        if (family is null
-            && halfPoints is null
-            && !bold
-            && !italic
-            && !underline
-            && !strikethrough
-            && color is null
-            && highlight is null)
+        if (family is not null)
+        {
+            overrides |= RunPropertyOverrides.FontFamily;
+        }
+
+        if (halfPoints is not null)
+        {
+            overrides |= RunPropertyOverrides.FontSize;
+        }
+
+        if (boldElement is not null)
+        {
+            overrides |= RunPropertyOverrides.Bold;
+        }
+
+        if (italicElement is not null)
+        {
+            overrides |= RunPropertyOverrides.Italic;
+        }
+
+        if (underlineElement is not null)
+        {
+            overrides |= RunPropertyOverrides.Underline;
+        }
+
+        if (strikeElement is not null)
+        {
+            overrides |= RunPropertyOverrides.Strikethrough;
+        }
+
+        if (colorElement is not null)
+        {
+            overrides |= RunPropertyOverrides.Color;
+        }
+
+        if (highlightElement is not null || shadingElement is not null)
+        {
+            overrides |= RunPropertyOverrides.Highlight;
+        }
+
+        if (string.IsNullOrWhiteSpace(styleId) && overrides == RunPropertyOverrides.None)
         {
             return null;
         }
@@ -505,6 +596,8 @@ public static class DocxService
             Strikethrough = strikethrough,
             ColorHex = color is null ? "#000000" : "#" + color,
             HighlightHex = highlight is null ? null : "#" + highlight,
+            StyleId = styleId,
+            Overrides = overrides,
         };
     }
 
@@ -515,53 +608,95 @@ public static class DocxService
             return null;
         }
 
-        var runProperties = new WpRunProperties(
-            new RunFonts
+        var hasStyle = !string.IsNullOrWhiteSpace(properties.StyleId);
+        var runProperties = new WpRunProperties();
+
+        bool Writes(RunPropertyOverrides flag) =>
+            !hasStyle || properties.Overrides.HasFlag(flag);
+
+        if (Writes(RunPropertyOverrides.FontFamily))
+        {
+            runProperties.Append(new RunFonts
             {
                 Ascii = properties.FontFamily,
                 HighAnsi = properties.FontFamily,
-            },
-            new FontSize
+            });
+        }
+
+        if (Writes(RunPropertyOverrides.FontSize))
+        {
+            runProperties.Append(new FontSize
             {
                 Val = ((int)Math.Round(properties.FontSizePoints * 2))
                     .ToString(CultureInfo.InvariantCulture),
             });
+        }
 
-        if (properties.Bold)
+        if (hasStyle && Writes(RunPropertyOverrides.Bold))
+        {
+            runProperties.Append(new Bold { Val = properties.Bold });
+        }
+        else if (properties.Bold)
         {
             runProperties.Append(new Bold());
         }
 
-        if (properties.Italic)
+        if (hasStyle && Writes(RunPropertyOverrides.Italic))
+        {
+            runProperties.Append(new Italic { Val = properties.Italic });
+        }
+        else if (properties.Italic)
         {
             runProperties.Append(new Italic());
         }
 
-        if (properties.Underline)
+        if (hasStyle && Writes(RunPropertyOverrides.Underline))
+        {
+            runProperties.Append(new Underline
+            {
+                Val = properties.Underline ? UnderlineValues.Single : UnderlineValues.None,
+            });
+        }
+        else if (properties.Underline)
         {
             runProperties.Append(new Underline { Val = UnderlineValues.Single });
         }
 
-        if (properties.Strikethrough)
+        if (hasStyle && Writes(RunPropertyOverrides.Strikethrough))
+        {
+            runProperties.Append(new Strike { Val = properties.Strikethrough });
+        }
+        else if (properties.Strikethrough)
         {
             runProperties.Append(new Strike());
         }
 
         var color = NormalizeHex(properties.ColorHex);
+        var writeColor = hasStyle
+            ? Writes(RunPropertyOverrides.Color)
+            : color is not null;
 
-        if (color is not null)
+        if (writeColor)
         {
-            runProperties.Append(new Color { Val = color });
+            runProperties.Append(new Color { Val = color ?? "000000" });
         }
 
         var highlight = NormalizeHex(properties.HighlightHex);
+        var writeHighlight = hasStyle
+            ? Writes(RunPropertyOverrides.Highlight)
+            : highlight is not null;
 
-        if (highlight is not null)
+        if (writeHighlight)
         {
-            runProperties.Append(new Shading { Fill = highlight });
+            runProperties.Append(new Shading { Fill = highlight ?? "auto" });
         }
 
-        return runProperties;
+        if (hasStyle)
+        {
+            runProperties.Append(new RunStyle { Val = properties.StyleId });
+        }
+
+        return runProperties.ChildElements.Count > 0 ? runProperties : null;
     }
 
     private static double? ParseHalfPoints(string? value) =>
@@ -608,6 +743,315 @@ public static class DocxService
             "black" => "#000000",
             _ => null,
         };
+    private static StyleSheet LoadStyles(
+        MainDocumentPart mainPart,
+        Action<string, string> report)
+    {
+        var definitions = mainPart.StyleDefinitionsPart?.Styles;
+
+        if (definitions is null)
+        {
+            return StyleSheet.Default;
+        }
+
+        var paragraphStyles = StyleSheet.Default.ParagraphStyles.ToList();
+        var characterStyles = StyleSheet.Default.CharacterStyles.ToList();
+
+        try
+        {
+            foreach (var style in definitions.Elements<WpStyle>())
+            {
+                var id = style.StyleId?.Value;
+
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    report(
+                        DocxDiagnosticCodes.UnsupportedStyle,
+                        "A style definition without an ID was ignored.");
+                    continue;
+                }
+
+                var name = style.StyleName?.Val?.Value?.Trim();
+                name = string.IsNullOrWhiteSpace(name) ? id : name;
+
+                if (style.Type?.Value == StyleValues.Paragraph)
+                {
+                    var isDefault = style.Default?.Value == true;
+                    var targetId = isDefault ? StyleSheet.NormalStyleId : id;
+                    var targetName = isDefault ? "Normal" : name;
+                    var properties = ParseStyleParagraphProperties(style.StyleParagraphProperties)
+                        ?? CoreParagraphProperties.Default;
+                    var characterProperties = ParseStyleRunProperties(style.StyleRunProperties)
+                        ?? CoreRunProperties.Default;
+                    Upsert(
+                        paragraphStyles,
+                        new ParagraphStyle(
+                            targetId,
+                            targetName,
+                            properties,
+                            characterProperties),
+                        candidate => candidate.Id);
+                }
+                else if (style.Type?.Value == StyleValues.Character)
+                {
+                    var isDefault = style.Default?.Value == true;
+                    var targetId = isDefault
+                        ? StyleSheet.DefaultCharacterStyleId
+                        : id;
+                    var targetName = isDefault ? "Default" : name;
+                    var properties = ParseStyleRunProperties(style.StyleRunProperties)
+                        ?? CoreRunProperties.Default;
+                    Upsert(
+                        characterStyles,
+                        new CharacterStyle(targetId, targetName, properties),
+                        candidate => candidate.Id);
+                }
+            }
+        }
+        catch (Exception exception) when (
+            exception is InvalidDataException or InvalidOperationException or FormatException)
+        {
+            report(
+                DocxDiagnosticCodes.UnsupportedStyle,
+                "Some style definitions could not be read.");
+        }
+
+        return new StyleSheet(
+            paragraphStyles.ToImmutableArray(),
+            characterStyles.ToImmutableArray());
+    }
+
+    private static CoreParagraphProperties? ParseStyleParagraphProperties(
+        StyleParagraphProperties? properties)
+    {
+        if (properties is null)
+        {
+            return null;
+        }
+
+        var justification = properties.GetFirstChild<Justification>();
+        var spacing = properties.GetFirstChild<SpacingBetweenLines>();
+        var indentation = properties.GetFirstChild<Indentation>();
+        var alignment = justification?.Val?.InnerText?.ToLowerInvariant() switch
+        {
+            "center" => ParagraphAlignment.Center,
+            "right" or "end" => ParagraphAlignment.Right,
+            "both" => ParagraphAlignment.Justify,
+            _ => ParagraphAlignment.Left,
+        };
+        var firstLinePoints = ParseTwips(indentation?.FirstLine?.Value)
+            ?? (ParseTwips(indentation?.Hanging?.Value) is { } hanging
+                ? -hanging
+                : 0);
+
+        if (justification is null
+            && spacing is null
+            && indentation is null)
+        {
+            return null;
+        }
+
+        return new CoreParagraphProperties
+        {
+            Alignment = alignment,
+            SpaceBeforePoints = ParseTwips(spacing?.Before?.Value) ?? 0,
+            SpaceAfterPoints = ParseTwips(spacing?.After?.Value) ?? 8,
+            LineSpacing = ParseLineSpacing(spacing),
+            LeftIndentPoints = ParseTwips(indentation?.Left?.Value) ?? 0,
+            RightIndentPoints = ParseTwips(indentation?.Right?.Value) ?? 0,
+            FirstLineIndentPoints = firstLinePoints,
+        };
+    }
+
+    private static CoreRunProperties? ParseStyleRunProperties(
+        StyleRunProperties? properties) =>
+        properties is null ? null : ParseRunProperties(properties, styleId: null);
+
+    private static void SaveStyles(MainDocumentPart mainPart, StyleSheet styleSheet)
+    {
+        var stylesPart = mainPart.AddNewPart<StyleDefinitionsPart>();
+        var styles = new Styles();
+
+        foreach (var style in styleSheet.ParagraphStyles)
+        {
+            var element = new WpStyle
+            {
+                Type = StyleValues.Paragraph,
+                StyleId = style.Id,
+                Default = style.Id == StyleSheet.NormalStyleId ? true : null,
+            };
+            element.Append(new StyleName { Val = style.Name });
+            var paragraphProperties = ToStyleParagraphProperties(style.Properties);
+            var runProperties = ToStyleRunProperties(
+                style.CharacterProperties ?? CoreRunProperties.Default);
+
+            if (paragraphProperties is not null)
+            {
+                element.Append(paragraphProperties);
+            }
+
+            if (runProperties is not null)
+            {
+                element.Append(runProperties);
+            }
+
+            styles.Append(element);
+        }
+
+        foreach (var style in styleSheet.CharacterStyles)
+        {
+            var element = new WpStyle
+            {
+                Type = StyleValues.Character,
+                StyleId = style.Id,
+                Default = style.Id == StyleSheet.DefaultCharacterStyleId ? true : null,
+            };
+            element.Append(new StyleName { Val = style.Name });
+            var runProperties = ToStyleRunProperties(style.Properties);
+
+            if (runProperties is not null)
+            {
+                element.Append(runProperties);
+            }
+
+            styles.Append(element);
+        }
+
+        stylesPart.Styles = styles;
+    }
+
+    private static StyleParagraphProperties? ToStyleParagraphProperties(
+        CoreParagraphProperties properties)
+    {
+        var element = new StyleParagraphProperties();
+        var hasContent = false;
+
+        if (properties.Alignment != ParagraphAlignment.Left)
+        {
+            element.Append(new Justification
+            {
+                Val = properties.Alignment switch
+                {
+                    ParagraphAlignment.Center => JustificationValues.Center,
+                    ParagraphAlignment.Right => JustificationValues.Right,
+                    ParagraphAlignment.Justify => JustificationValues.Both,
+                    _ => JustificationValues.Left,
+                },
+            });
+            hasContent = true;
+        }
+
+        if (properties.SpaceBeforePoints != 0
+            || properties.SpaceAfterPoints != 8
+            || Math.Abs(properties.LineSpacing - 1.15) > 0.0001)
+        {
+            element.Append(new SpacingBetweenLines
+            {
+                Before = ToTwips(properties.SpaceBeforePoints),
+                After = ToTwips(properties.SpaceAfterPoints),
+                Line = ((int)Math.Round(properties.LineSpacing * 240))
+                    .ToString(CultureInfo.InvariantCulture),
+                LineRule = LineSpacingRuleValues.Auto,
+            });
+            hasContent = true;
+        }
+
+        if (properties.LeftIndentPoints != 0
+            || properties.RightIndentPoints != 0
+            || properties.FirstLineIndentPoints != 0)
+        {
+            var indentation = new Indentation
+            {
+                Left = ToTwips(properties.LeftIndentPoints),
+                Right = ToTwips(properties.RightIndentPoints),
+            };
+
+            if (properties.FirstLineIndentPoints >= 0)
+            {
+                indentation.FirstLine = ToTwips(properties.FirstLineIndentPoints);
+            }
+            else
+            {
+                indentation.Hanging = ToTwips(-properties.FirstLineIndentPoints);
+            }
+
+            element.Append(indentation);
+            hasContent = true;
+        }
+
+        return hasContent ? element : null;
+    }
+
+    private static StyleRunProperties ToStyleRunProperties(CoreRunProperties properties)
+    {
+        var element = new StyleRunProperties(
+            new RunFonts
+            {
+                Ascii = properties.FontFamily,
+                HighAnsi = properties.FontFamily,
+            },
+            new FontSize
+            {
+                Val = ((int)Math.Round(properties.FontSizePoints * 2))
+                    .ToString(CultureInfo.InvariantCulture),
+            });
+
+        if (properties.Bold)
+        {
+            element.Append(new Bold());
+        }
+
+        if (properties.Italic)
+        {
+            element.Append(new Italic());
+        }
+
+        if (properties.Underline)
+        {
+            element.Append(new Underline { Val = UnderlineValues.Single });
+        }
+
+        if (properties.Strikethrough)
+        {
+            element.Append(new Strike());
+        }
+
+        var color = NormalizeHex(properties.ColorHex);
+
+        if (color is not null)
+        {
+            element.Append(new Color { Val = color });
+        }
+
+        var highlight = NormalizeHex(properties.HighlightHex);
+
+        if (highlight is not null)
+        {
+            element.Append(new Shading { Fill = highlight });
+        }
+
+        return element;
+    }
+
+    private static void Upsert<T>(
+        List<T> styles,
+        T style,
+        Func<T, string> idSelector)
+    {
+        var id = idSelector(style);
+        var index = styles.FindIndex(candidate =>
+            string.Equals(idSelector(candidate), id, StringComparison.Ordinal));
+
+        if (index < 0)
+        {
+            styles.Add(style);
+        }
+        else
+        {
+            styles[index] = style;
+        }
+    }
+
     private static ParagraphBlock ToParagraphBlock(
         WpParagraph paragraph,
         Action<string, string> report,
@@ -750,6 +1194,47 @@ public static class DocxService
             ?? (ParseTwips(indentation?.Hanging?.Value) is { } hanging
                 ? -hanging
                 : 0);
+        var overrides = ParagraphPropertyOverrides.None;
+
+        if (properties.Justification is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.Alignment;
+        }
+
+        if (spacing?.Before is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.SpaceBefore;
+        }
+
+        if (spacing?.After is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.SpaceAfter;
+        }
+
+        if (spacing?.Line is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.LineSpacing;
+        }
+
+        if (indentation?.Left is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.LeftIndent;
+        }
+
+        if (indentation?.Right is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.RightIndent;
+        }
+
+        if (indentation?.FirstLine is not null || indentation?.Hanging is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.FirstLineIndent;
+        }
+
+        if (numberingProperties?.NumberingId is not null)
+        {
+            overrides |= ParagraphPropertyOverrides.List;
+        }
 
         if (alignment == ParagraphAlignment.Left
             && spacing is null
@@ -773,6 +1258,7 @@ public static class DocxService
             ListLevel = Math.Clamp(listLevel, 1, 9),
             ListId = listId,
             StyleId = properties.ParagraphStyleId?.Val?.Value,
+            Overrides = overrides,
         };
     }
 

@@ -23,4 +23,5 @@ public static class DocxDiagnosticCodes
     public const string UnsupportedTrackedChange = "MSW2006";
     public const string UnsupportedRunContent = "MSW2007";
     public const string UnsupportedBlock = "MSW2008";
+    public const string UnsupportedStyle = "MSW2009";
 }
