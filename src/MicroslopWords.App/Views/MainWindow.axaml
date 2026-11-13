@@ -60,6 +60,7 @@
         <KeyBinding Gesture="F3" Command="{Binding FindNextCommand}" />
         <KeyBinding Gesture="Shift+F3" Command="{Binding FindPreviousCommand}" />
         <KeyBinding Gesture="Escape" Command="{Binding CloseFindCommand}" />
+        <KeyBinding Gesture="Escape" Command="{Binding ExitHeaderFooterModeCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -100,6 +101,19 @@
                 <Separator />
                 <MenuItem Header="_Image..." Command="{Binding InsertImageCommand}" />
                 <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
+                <Separator />
+                <MenuItem Header="_Header">
+                    <MenuItem Header="_Default" Command="{Binding EnterHeaderModeCommand}" />
+                    <MenuItem Header="_First Page" Command="{Binding EnterFirstPageHeaderModeCommand}" />
+                </MenuItem>
+                <MenuItem Header="_Footer">
+                    <MenuItem Header="_Default" Command="{Binding EnterFooterModeCommand}" />
+                    <MenuItem Header="_First Page" Command="{Binding EnterFirstPageFooterModeCommand}" />
+                </MenuItem>
+                <MenuItem Header="_Page Number">
+                    <MenuItem Header="Current _Page" Command="{Binding InsertPageNumberFieldCommand}" />
+                    <MenuItem Header="Page X of _Y" Command="{Binding InsertTotalPagesFieldCommand}" />
+                </MenuItem>
             </MenuItem>
             <MenuItem Header="_Format" IsEnabled="{Binding IsEditingEnabled}">
                 <MenuItem Header="_Bold" Command="{Binding ToggleBoldCommand}" />
@@ -383,6 +397,46 @@
             </StackPanel>
         </Border>
 
+        <Border x:Name="HeaderFooterModeStrip"
+                DockPanel.Dock="Top"
+                Background="#F1F6FB"
+                BorderBrush="#C8DDF7"
+                BorderThickness="0,0,0,1"
+                Padding="10,6"
+                IsVisible="{Binding IsHeaderFooterMode}">
+            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled">
+                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                    <TextBlock Text="{Binding HeaderFooterModeLabel}"
+                               FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <TextBlock Text="Esc to close"
+                               Foreground="#5F6A76"
+                               VerticalAlignment="Center" />
+                    <Button Content="Page number"
+                            Command="{Binding InsertPageNumberFieldCommand}" />
+                    <Button Content="Page X of Y"
+                            Command="{Binding InsertTotalPagesFieldCommand}" />
+                    <ComboBox Width="150"
+                              ItemsSource="{Binding PageNumberFormats}"
+                              SelectedItem="{Binding PageNumberFormatInput, Mode=TwoWay}" />
+                    <Button Content="Apply format"
+                            Command="{Binding ApplyPageNumberFormatCommand}" />
+                    <TextBox Width="48"
+                             Text="{Binding PageNumberStartInput, Mode=TwoWay}" />
+                    <Button Content="Set start"
+                            Command="{Binding ApplyPageNumberStartCommand}" />
+                    <Button Content="Different first page"
+                            Command="{Binding ToggleDifferentFirstPageCommand}" />
+                    <Button Content="Link header"
+                            Command="{Binding ToggleHeaderLinkCommand}" />
+                    <Button Content="Link footer"
+                            Command="{Binding ToggleFooterLinkCommand}" />
+                    <Button Content="Close"
+                            Command="{Binding ExitHeaderFooterModeCommand}" />
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+
         <Border DockPanel.Dock="Bottom" Background="#F5F5F5" BorderBrush="#D8D8D8" BorderThickness="0,1,0,0" Padding="10,5">
             <Grid ColumnDefinitions="*,Auto">
                 <TextBlock Text="{Binding StatusText}" FontSize="12" />
@@ -497,6 +551,9 @@
                                              SearchHighlights="{Binding SearchHighlights}"
                                              IsEditable="{Binding IsEditingEnabled}"
                                              EditorHost="{Binding}"
+                                             ActiveHeaderFooterKind="{Binding ActiveHeaderFooterKind}"
+                                             ActiveHeaderFooterSectionId="{Binding ActiveHeaderFooterSectionId}"
+                                             HeaderFooterZoneActivated="OnHeaderFooterZoneActivated"
                                              Zoom="{Binding Zoom, Mode=TwoWay}"
                                              CurrentPage="{Binding CurrentPage, Mode=OneWayToSource}"
                                              HorizontalAlignment="Center"

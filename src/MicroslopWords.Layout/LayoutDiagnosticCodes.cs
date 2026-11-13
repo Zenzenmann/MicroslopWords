@@ -6,4 +6,5 @@ public static class LayoutDiagnosticCodes
     public const string FontMissingGlyph = "MSW4002";
     public const string FontUnreadable = "MSW4003";
     public const string TableRowOverflow = "MSW4004";
+    public const string HeaderFooterOverflow = "MSW4005";
 }

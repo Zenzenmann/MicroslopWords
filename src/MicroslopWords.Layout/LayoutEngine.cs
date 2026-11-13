@@ -60,6 +60,8 @@ public sealed class LayoutEngine
         var tables = ImmutableArray.CreateBuilder<TableLayout>();
         var pageNumber = 1;
         var cursorY = activePage.MarginTopPoints;
+        var currentSectionIndex = 0;
+        var sectionFirstPageNumber = 1;
 
         void FlushPage()
         {
@@ -76,7 +78,15 @@ public sealed class LayoutEngine
                     activePage.EffectiveWidthPoints,
                     activePage.EffectiveHeightPoints),
                 paragraphs.ToImmutable(),
-                tables.ToImmutable()));
+                tables.ToImmutable(),
+                currentSectionIndex,
+                pageNumber == sectionFirstPageNumber,
+                null,
+                null,
+                activePage.MarginTopPoints,
+                activePage.MarginBottomPoints,
+                activePage.MarginLeftPoints,
+                activePage.MarginRightPoints));
 
             paragraphs.Clear();
             tables.Clear();
@@ -244,13 +254,17 @@ public sealed class LayoutEngine
             }
         }
 
-        foreach (var section in document.Sections)
+        for (var sectionIndex = 0; sectionIndex < document.Sections.Length; sectionIndex++)
         {
+            var section = document.Sections[sectionIndex];
+
             if (paragraphs.Count > 0 || tables.Count > 0)
             {
                 FlushPage();
             }
 
+            currentSectionIndex = sectionIndex;
+            sectionFirstPageNumber = pageNumber;
             activePage = pageSettings ?? section.EffectivePage;
             contentWidth = constraints?.MaxWidthPoints ?? activePage.ContentWidthPoints;
             contentHeight = constraints?.MaxHeightPoints ?? activePage.ContentHeightPoints;
@@ -467,8 +481,23 @@ public sealed class LayoutEngine
                     defaultPage.EffectiveWidthPoints,
                     defaultPage.EffectiveHeightPoints),
                 ImmutableArray<ParagraphLayout>.Empty,
-                ImmutableArray<TableLayout>.Empty));
+                ImmutableArray<TableLayout>.Empty,
+                0,
+                true,
+                null,
+                null,
+                defaultPage.MarginTopPoints,
+                defaultPage.MarginBottomPoints,
+                defaultPage.MarginLeftPoints,
+                defaultPage.MarginRightPoints));
         }
+
+        ApplyHeadersFooters(
+            document,
+            pages,
+            shaper,
+            styleSheet,
+            diagnostics);
 
         foreach (var diagnostic in catalog.Diagnostics)
         {
@@ -481,6 +510,322 @@ public sealed class LayoutEngine
             defaultPage.EffectiveHeightPoints,
             pageBreaks.ToImmutable(),
             Deduplicate(diagnostics));
+    }
+
+    private const double HeaderFooterDistancePoints = 36;
+    private const double HeaderFooterGapPoints = 6;
+
+    private static void ApplyHeadersFooters(
+        Document document,
+        ImmutableArray<PageLayout>.Builder pages,
+        TextShaper shaper,
+        StyleSheet styleSheet,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        if (pages.Count == 0 || document.Sections.Length == 0)
+        {
+            return;
+        }
+
+        var pageNumbers = ResolvePageNumberTexts(document, pages);
+        var totalPages = pages.Count;
+        var overflowReported = false;
+
+        for (var pageIndex = 0; pageIndex < pages.Count; pageIndex++)
+        {
+            var page = pages[pageIndex];
+            var sectionIndex = Math.Clamp(
+                page.SectionIndex,
+                0,
+                document.Sections.Length - 1);
+            var section = document.Sections[sectionIndex];
+            var variant = page.IsSectionFirstPage && section.DifferentFirstPage
+                ? HeaderFooterVariant.FirstPage
+                : HeaderFooterVariant.Default;
+            var (pageText, format) = pageNumbers[pageIndex];
+            var totalText = PageNumberFormatter.Format(totalPages, format);
+            var header = LayoutHeaderFooter(
+                document,
+                page,
+                section,
+                HeaderFooterKind.Header,
+                variant,
+                pageText,
+                totalText,
+                shaper,
+                styleSheet,
+                diagnostics,
+                ref overflowReported);
+            var footer = LayoutHeaderFooter(
+                document,
+                page,
+                section,
+                HeaderFooterKind.Footer,
+                variant,
+                pageText,
+                totalText,
+                shaper,
+                styleSheet,
+                diagnostics,
+                ref overflowReported);
+
+            pages[pageIndex] = page with
+            {
+                Header = header,
+                Footer = footer,
+            };
+        }
+    }
+
+    private static (string Text, PageNumberFormat Format)[] ResolvePageNumberTexts(
+        Document document,
+        ImmutableArray<PageLayout>.Builder pages)
+    {
+        var values = new (string Text, PageNumberFormat Format)[pages.Count];
+        var number = 1;
+        var format = PageNumberFormat.DecimalNumber;
+
+        for (var index = 0; index < pages.Count; index++)
+        {
+            var page = pages[index];
+            var sectionIndex = Math.Clamp(
+                page.SectionIndex,
+                0,
+                document.Sections.Length - 1);
+            var section = document.Sections[sectionIndex];
+
+            if (page.IsSectionFirstPage)
+            {
+                if (section.PageNumberStart is { } start)
+                {
+                    number = start;
+                }
+
+                if (section.PageNumberFormat is { } sectionFormat)
+                {
+                    format = sectionFormat;
+                }
+            }
+
+            values[index] = (PageNumberFormatter.Format(number, format), format);
+            number++;
+        }
+
+        return values;
+    }
+
+    private static HeaderFooterLayout? LayoutHeaderFooter(
+        Document document,
+        PageLayout page,
+        Section section,
+        HeaderFooterKind kind,
+        HeaderFooterVariant variant,
+        string pageText,
+        string totalText,
+        TextShaper shaper,
+        StyleSheet styleSheet,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        ref bool overflowReported)
+    {
+        var content = document.ResolveHeaderFooter(page.SectionIndex, kind, variant);
+
+        if (content is null || !content.HasVisibleContent)
+        {
+            return null;
+        }
+
+        var width = Math.Max(
+            1,
+            page.Bounds.Width
+                - page.MarginLeftPoints
+                - page.MarginRightPoints);
+        var left = page.MarginLeftPoints;
+        var paragraphs = content.Blocks
+            .OfType<ParagraphBlock>()
+            .Select(paragraph => ResolvePageFields(paragraph, pageText, totalText))
+            .ToImmutableArray();
+        var layout = LayoutHeaderFooterParagraphs(
+            paragraphs,
+            left,
+            width,
+            shaper,
+            styleSheet,
+            diagnostics);
+        var height = layout.Length == 0
+            ? 0
+            : layout.Max(paragraph => paragraph.Bounds.Bottom);
+
+        if (height <= 0)
+        {
+            return null;
+        }
+
+        var available = kind == HeaderFooterKind.Header
+            ? page.MarginTopPoints - HeaderFooterDistancePoints - HeaderFooterGapPoints
+            : page.MarginBottomPoints - HeaderFooterDistancePoints - HeaderFooterGapPoints;
+
+        if (height > available && !overflowReported)
+        {
+            overflowReported = true;
+            diagnostics.Add(new Diagnostic(
+                LayoutDiagnosticCodes.HeaderFooterOverflow,
+                DiagnosticSeverity.Warning,
+                "Header or footer content exceeds the available margin area."));
+        }
+
+        var top = kind == HeaderFooterKind.Header
+            ? HeaderFooterDistancePoints
+            : page.Bounds.Height - HeaderFooterDistancePoints - height;
+
+        return new HeaderFooterLayout(
+            kind,
+            variant,
+            section.Id,
+            new LayoutRect(left, top, width, height),
+            layout);
+    }
+
+    private static ParagraphBlock ResolvePageFields(
+        ParagraphBlock paragraph,
+        string pageText,
+        string totalText) =>
+        paragraph with
+        {
+            Runs = paragraph.Runs
+                .Select(run => run.PageField switch
+                {
+                    PageFieldKind.PageNumber => run with { Text = pageText },
+                    PageFieldKind.TotalPages => run with { Text = totalText },
+                    _ => run,
+                })
+                .ToImmutableArray(),
+        };
+
+    private static ImmutableArray<ParagraphLayout> LayoutHeaderFooterParagraphs(
+        ImmutableArray<ParagraphBlock> paragraphs,
+        double left,
+        double width,
+        TextShaper shaper,
+        StyleSheet styleSheet,
+        ImmutableArray<Diagnostic>.Builder diagnostics)
+    {
+        var result = ImmutableArray.CreateBuilder<ParagraphLayout>(paragraphs.Length);
+        var y = 0d;
+
+        foreach (var paragraph in paragraphs)
+        {
+            var properties = StyleResolver.ResolveParagraph(paragraph, styleSheet);
+            var baseLeft = left + properties.LeftIndentPoints;
+            var textLeft = baseLeft;
+            var wrapWidth = Math.Max(
+                1,
+                width
+                    - properties.LeftIndentPoints
+                    - properties.RightIndentPoints
+                    - Math.Max(0, properties.FirstLineIndentPoints));
+            var firstLineExtra = properties.FirstLineIndentPoints;
+            var defaultProperties = paragraph.Runs.Length == 0
+                ? styleSheet.FindParagraphStyle(properties.StyleId)?.CharacterProperties
+                    ?? RunProperties.Default
+                : StyleResolver.ResolveRun(paragraph.Runs[0], paragraph, styleSheet);
+            var defaultFont = ResolveFontRequest(defaultProperties);
+            var segments = SplitTextSegments(paragraph.PlainText);
+            var lines = ImmutableArray.CreateBuilder<LineLayout>();
+            var afterSoftBreak = false;
+            y += properties.SpaceBeforePoints;
+            var paragraphTop = y;
+
+            foreach (var segment in segments)
+            {
+                var shaped = ShapeSegment(
+                    paragraph,
+                    segment.Start,
+                    segment.Text.Length,
+                    shaper,
+                    diagnostics,
+                    defaultFont,
+                    defaultProperties.FontSizePoints,
+                    styleSheet,
+                    wrapWidth,
+                    double.MaxValue);
+                var wrapped = WrapStyledText(
+                    segment.Text,
+                    segment.Start,
+                    shaped.Clusters,
+                    wrapWidth,
+                    shaped.DefaultFont,
+                    shaped.DefaultFontSize,
+                    properties.Alignment == ParagraphAlignment.Justify);
+
+                for (var lineIndex = 0; lineIndex < wrapped.Length; lineIndex++)
+                {
+                    var line = wrapped[lineIndex];
+                    var lineHeight = Math.Max(
+                        line.FontSizePoints * properties.LineSpacing,
+                        line.ImageHeightPoints);
+                    var lineX = textLeft;
+
+                    if (lineIndex == 0)
+                    {
+                        lineX += firstLineExtra;
+                    }
+
+                    switch (properties.Alignment)
+                    {
+                        case ParagraphAlignment.Center:
+                            lineX += (wrapWidth - line.AdvanceWidthPoints) / 2;
+                            break;
+                        case ParagraphAlignment.Right:
+                            lineX += wrapWidth - line.AdvanceWidthPoints;
+                            break;
+                    }
+
+                    lineX = Math.Max(left, lineX);
+
+                    var images = ImmutableArray.CreateBuilder<InlineImageLayout>(
+                        line.Images.Length);
+
+                    foreach (var image in line.Images)
+                    {
+                        images.Add(new InlineImageLayout(
+                            image.RunId,
+                            image.TextStart,
+                            new LayoutRect(
+                                lineX + image.X,
+                                y + lineHeight - image.HeightPoints,
+                                image.WidthPoints,
+                                image.HeightPoints),
+                            image.Image));
+                    }
+
+                    lines.Add(new LineLayout(
+                        line.Text,
+                        line.TextStart,
+                        afterSoftBreak && lineIndex == 0,
+                        new LayoutRect(
+                            lineX,
+                            y,
+                            line.AdvanceWidthPoints,
+                            lineHeight),
+                        line.FontSizePoints,
+                        line.Clusters,
+                        line.ResolvedFont,
+                        line.Spans,
+                        images.ToImmutable()));
+                    y += lineHeight;
+                }
+
+                afterSoftBreak = segment.BreakAfter != TextBreakKind.None;
+            }
+
+            result.Add(new ParagraphLayout(
+                paragraph.Id,
+                new LayoutRect(left, paragraphTop, width, y - paragraphTop),
+                lines.ToImmutable()));
+            y += properties.SpaceAfterPoints;
+        }
+
+        return result.ToImmutable();
     }
 
     private static ShapedSegment ShapeSegment(

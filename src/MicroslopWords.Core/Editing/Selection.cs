@@ -467,6 +467,14 @@ public static class TextNavigation
         Guid firstParagraphId,
         Guid secondParagraphId)
     {
+        var firstZone = document.FindHeaderFooterZone(firstParagraphId);
+        var secondZone = document.FindHeaderFooterZone(secondParagraphId);
+
+        if (firstZone is not null || secondZone is not null)
+        {
+            return firstZone == secondZone;
+        }
+
         var firstTable = document.FindTableForParagraph(firstParagraphId);
         var secondTable = document.FindTableForParagraph(secondParagraphId);
 
@@ -506,7 +514,7 @@ public static class TextNavigation
     }
 
     public static IEnumerable<ParagraphBlock> AllParagraphs(Document document) =>
-        document.EnumerateParagraphs();
+        document.EnumerateAllParagraphs();
 
     public static int FindRunIndex(ParagraphBlock paragraph, Guid runId)
     {

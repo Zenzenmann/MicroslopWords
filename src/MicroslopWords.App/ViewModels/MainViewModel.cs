@@ -414,6 +414,64 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     public partial string TableWidthInput { get; set; } = string.Empty;
 
     [ObservableProperty]
+    public partial HeaderFooterKind? ActiveHeaderFooterKind { get; set; }
+
+    [ObservableProperty]
+    public partial Guid ActiveHeaderFooterSectionId { get; set; }
+
+    [ObservableProperty]
+    public partial HeaderFooterVariant ActiveHeaderFooterVariant { get; set; } =
+        HeaderFooterVariant.Default;
+
+    [ObservableProperty]
+    public partial bool IsDifferentFirstPage { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsHeaderLinkedToPrevious { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsFooterLinkedToPrevious { get; set; }
+
+    [ObservableProperty]
+    public partial string PageNumberStartInput { get; set; } = "1";
+
+    [ObservableProperty]
+    public partial string PageNumberFormatInput { get; set; } =
+        nameof(PageNumberFormat.DecimalNumber);
+
+    public bool IsHeaderFooterMode => ActiveHeaderFooterKind is not null;
+
+    public string HeaderFooterModeLabel
+    {
+        get
+        {
+            if (ActiveHeaderFooterKind is not { } kind)
+            {
+                return string.Empty;
+            }
+
+            var sectionNumber = 1;
+
+            for (var index = 0; index < Document.Sections.Length; index++)
+            {
+                if (Document.Sections[index].Id == ActiveHeaderFooterSectionId)
+                {
+                    sectionNumber = index + 1;
+                    break;
+                }
+            }
+
+            var variant = ActiveHeaderFooterVariant == HeaderFooterVariant.FirstPage
+                ? " (first page)"
+                : string.Empty;
+
+            return $"{kind} - Section {sectionNumber}{variant}";
+        }
+    }
+
+    private Selection _bodySelectionBeforeHeaderFooter;
+
+    [ObservableProperty]
     public partial bool IsStylesPanelOpen { get; set; }
 
     [ObservableProperty]
@@ -447,6 +505,9 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     public partial bool IsStyleKindEditable { get; set; } = true;
 
     public IReadOnlyList<string> StyleKinds { get; } = ["Paragraph", "Character"];
+
+    public IReadOnlyList<string> PageNumberFormats { get; } =
+        Enum.GetNames<PageNumberFormat>();
 
     [ObservableProperty]
     public partial string StyleDeletePrompt { get; set; } = string.Empty;
@@ -973,6 +1034,381 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
         RefreshParagraphFormattingState();
         RefreshStyleState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void EnterHeaderMode() =>
+        EnterHeaderFooter(HeaderFooterKind.Header, HeaderFooterVariant.Default);
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void EnterFooterMode() =>
+        EnterHeaderFooter(HeaderFooterKind.Footer, HeaderFooterVariant.Default);
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void EnterFirstPageHeaderMode() =>
+        EnterHeaderFooter(HeaderFooterKind.Header, HeaderFooterVariant.FirstPage);
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void EnterFirstPageFooterMode() =>
+        EnterHeaderFooter(HeaderFooterKind.Footer, HeaderFooterVariant.FirstPage);
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void ExitHeaderFooterMode()
+    {
+        if (ActiveHeaderFooterKind is null)
+        {
+            return;
+        }
+
+        ActiveHeaderFooterKind = null;
+        ActiveHeaderFooterVariant = HeaderFooterVariant.Default;
+        ActiveHeaderFooterSectionId = Guid.Empty;
+        _history.SetSelection(_bodySelectionBeforeHeaderFooter);
+        SyncSelectionFromHistory();
+        OnPropertyChanged(nameof(HeaderFooterModeLabel));
+    }
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void InsertPageNumberField() =>
+        InsertPageField(PageFieldKind.PageNumber);
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void InsertTotalPagesField() =>
+        InsertPageField(PageFieldKind.TotalPages);
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void ToggleDifferentFirstPage()
+    {
+        if (ActiveHeaderFooterKind is not { } kind)
+        {
+            return;
+        }
+
+        var section = Document.Sections.FirstOrDefault(
+            item => item.Id == ActiveHeaderFooterSectionId);
+
+        if (section is null)
+        {
+            return;
+        }
+
+        var enabled = !section.DifferentFirstPage;
+
+        try
+        {
+            ExecuteEdit(new SetDifferentFirstPageCommand(_history.Selection, section.Id, enabled));
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+            return;
+        }
+
+        IsDifferentFirstPage = enabled;
+
+        if (!enabled && ActiveHeaderFooterVariant == HeaderFooterVariant.FirstPage)
+        {
+            EnterHeaderFooterCore(
+                kind,
+                HeaderFooterVariant.Default,
+                section.Id,
+                captureBodySelection: false);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void ToggleHeaderLink()
+    {
+        if (ActiveHeaderFooterKind == HeaderFooterKind.Header)
+        {
+            ToggleHeaderFooterLink(HeaderFooterKind.Header);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void ToggleFooterLink()
+    {
+        if (ActiveHeaderFooterKind == HeaderFooterKind.Footer)
+        {
+            ToggleHeaderFooterLink(HeaderFooterKind.Footer);
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void ApplyPageNumberFormat()
+    {
+        if (ActiveHeaderFooterKind is null)
+        {
+            return;
+        }
+
+        if (!Enum.TryParse<PageNumberFormat>(
+                PageNumberFormatInput,
+                ignoreCase: true,
+                out var format))
+        {
+            ErrorMessage = "Choose a supported page number format.";
+            return;
+        }
+
+        try
+        {
+            ExecuteEdit(new SetPageNumberFormatCommand(
+                _history.Selection,
+                ActiveHeaderFooterSectionId,
+                format));
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(IsHeaderFooterMode))]
+    private void ApplyPageNumberStart()
+    {
+        if (ActiveHeaderFooterKind is null)
+        {
+            return;
+        }
+
+        int? start = null;
+
+        if (!string.IsNullOrWhiteSpace(PageNumberStartInput))
+        {
+            if (!int.TryParse(
+                    PageNumberStartInput,
+                    NumberStyles.Integer,
+                    CultureInfo.InvariantCulture,
+                    out var parsed)
+                || parsed < 1)
+            {
+                ErrorMessage = "Page number start must be at least 1.";
+                return;
+            }
+
+            start = parsed;
+        }
+
+        try
+        {
+            ExecuteEdit(new SetPageNumberStartCommand(
+                _history.Selection,
+                ActiveHeaderFooterSectionId,
+                start));
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    public void EnterHeaderFooter(
+        HeaderFooterKind kind,
+        HeaderFooterVariant variant,
+        Guid? sectionId = null)
+    {
+        var targetSectionId = sectionId ?? GetCurrentSectionId();
+
+        EnterHeaderFooterCore(
+            kind,
+            variant,
+            targetSectionId,
+            captureBodySelection: ActiveHeaderFooterKind is null);
+    }
+
+    public void HandleHeaderFooterZoneActivated(
+        HeaderFooterKind kind,
+        Guid sectionId) =>
+        EnterHeaderFooter(kind, HeaderFooterVariant.Default, sectionId);
+
+    private Guid GetCurrentSectionId()
+    {
+        if (ActiveHeaderFooterKind is not null
+            && Document.Sections.Any(section => section.Id == ActiveHeaderFooterSectionId))
+        {
+            return ActiveHeaderFooterSectionId;
+        }
+
+        var sectionIndex = Document.FindSectionIndexForParagraph(
+            _history.Selection.Focus.ParagraphId);
+        var section = Document.Sections.ElementAtOrDefault(sectionIndex)
+            ?? Document.Sections.FirstOrDefault();
+
+        return section?.Id ?? Guid.Empty;
+    }
+
+    private void EnterHeaderFooterCore(
+        HeaderFooterKind kind,
+        HeaderFooterVariant variant,
+        Guid sectionId,
+        bool captureBodySelection)
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        var sectionIndex = 0;
+
+        for (var index = 0; index < Document.Sections.Length; index++)
+        {
+            if (Document.Sections[index].Id == sectionId)
+            {
+                sectionIndex = index;
+                break;
+            }
+        }
+
+        sectionId = Document.Sections.ElementAtOrDefault(sectionIndex)?.Id ?? Guid.Empty;
+
+        if (captureBodySelection)
+        {
+            _bodySelectionBeforeHeaderFooter = _history.Selection;
+        }
+
+        try
+        {
+            var existing = Document.ResolveHeaderFooter(sectionIndex, kind, variant);
+
+            if (existing is not null && !existing.IsEmpty)
+            {
+                if (variant == HeaderFooterVariant.FirstPage
+                    && !Document.Sections[sectionIndex].DifferentFirstPage)
+                {
+                    ExecuteEdit(new SetDifferentFirstPageCommand(
+                        _history.Selection,
+                        sectionId,
+                        enabled: true));
+                }
+
+                var paragraph = existing.Blocks
+                    .OfType<ParagraphBlock>()
+                    .FirstOrDefault();
+
+                if (paragraph is not null)
+                {
+                    _history.SetSelection(
+                        Selection.Caret(TextNavigation.StartOf(paragraph)));
+                    SyncSelectionFromHistory();
+                }
+
+                ActiveHeaderFooterKind = kind;
+                ActiveHeaderFooterVariant = variant;
+                ActiveHeaderFooterSectionId = Document.Sections
+                    .ElementAtOrDefault(
+                        Document.FindHeaderFooterOwnerIndex(sectionIndex, kind))?.Id
+                    ?? sectionId;
+                RefreshHeaderFooterState();
+                ErrorMessage = string.Empty;
+                return;
+            }
+
+            var command = new EnterHeaderFooterCommand(sectionId, kind, variant);
+            _history.Execute(command);
+            FinishEdit();
+            ActiveHeaderFooterKind = kind;
+            ActiveHeaderFooterVariant = variant;
+            ActiveHeaderFooterSectionId = Document.Sections
+                .ElementAtOrDefault(command.OwnerSectionIndex)?.Id ?? sectionId;
+            RefreshHeaderFooterState();
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    private void InsertPageField(PageFieldKind kind)
+    {
+        if (ActiveHeaderFooterKind is null)
+        {
+            return;
+        }
+
+        try
+        {
+            ExecuteEdit(new InsertPageFieldCommand(_history.Selection, kind));
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    private void ToggleHeaderFooterLink(HeaderFooterKind kind)
+    {
+        var section = Document.Sections.FirstOrDefault(
+            item => item.Id == ActiveHeaderFooterSectionId);
+
+        if (section is null)
+        {
+            return;
+        }
+
+        var linked = section.LinksHeaderFooter(kind);
+
+        try
+        {
+            ExecuteEdit(new SetHeaderFooterLinkCommand(_history.Selection, section.Id, kind, !linked));
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+            return;
+        }
+
+        EnterHeaderFooterCore(
+            kind,
+            ActiveHeaderFooterVariant,
+            section.Id,
+            captureBodySelection: false);
+    }
+
+    private void RefreshHeaderFooterState()
+    {
+        var section = Document.Sections.FirstOrDefault(
+            item => item.Id == ActiveHeaderFooterSectionId);
+
+        if (section is null)
+        {
+            IsDifferentFirstPage = false;
+            IsHeaderLinkedToPrevious = false;
+            IsFooterLinkedToPrevious = false;
+            return;
+        }
+
+        IsDifferentFirstPage = section.DifferentFirstPage;
+        IsHeaderLinkedToPrevious = section.LinkHeaderToPrevious;
+        IsFooterLinkedToPrevious = section.LinkFooterToPrevious;
+        PageNumberFormatInput = (section.PageNumberFormat
+            ?? PageNumberFormat.DecimalNumber).ToString();
+        PageNumberStartInput = (section.PageNumberStart ?? 1).ToString(
+            CultureInfo.InvariantCulture);
+        OnPropertyChanged(nameof(HeaderFooterModeLabel));
+        NotifyHeaderFooterCommands();
+    }
+
+    private void NotifyHeaderFooterCommands()
+    {
+        EnterHeaderModeCommand.NotifyCanExecuteChanged();
+        EnterFooterModeCommand.NotifyCanExecuteChanged();
+        EnterFirstPageHeaderModeCommand.NotifyCanExecuteChanged();
+        EnterFirstPageFooterModeCommand.NotifyCanExecuteChanged();
+        ExitHeaderFooterModeCommand.NotifyCanExecuteChanged();
+        InsertPageNumberFieldCommand.NotifyCanExecuteChanged();
+        InsertTotalPagesFieldCommand.NotifyCanExecuteChanged();
+        ToggleDifferentFirstPageCommand.NotifyCanExecuteChanged();
+        ToggleHeaderLinkCommand.NotifyCanExecuteChanged();
+        ToggleFooterLinkCommand.NotifyCanExecuteChanged();
+        ApplyPageNumberFormatCommand.NotifyCanExecuteChanged();
+        ApplyPageNumberStartCommand.NotifyCanExecuteChanged();
     }
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
@@ -1768,7 +2204,9 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     }
     public void InsertText(string text)
     {
-        if (!IsEditingEnabled || string.IsNullOrEmpty(text))
+        if (!IsEditingEnabled
+            || !IsSelectionInActiveEditingScope()
+            || string.IsNullOrEmpty(text))
         {
             return;
         }
@@ -1781,7 +2219,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public void Backspace()
     {
-        if (IsEditingEnabled)
+        if (IsEditingEnabled && IsSelectionInActiveEditingScope())
         {
             ExecuteEdit(new DeleteBackwardCommand(_history.Selection));
         }
@@ -1789,7 +2227,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public void DeleteForward()
     {
-        if (IsEditingEnabled)
+        if (IsEditingEnabled && IsSelectionInActiveEditingScope())
         {
             ExecuteEdit(new DeleteForwardCommand(_history.Selection));
         }
@@ -1797,7 +2235,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public void DeleteWordBackward()
     {
-        if (IsEditingEnabled)
+        if (IsEditingEnabled && IsSelectionInActiveEditingScope())
         {
             ExecuteEdit(new DeleteWordBackwardCommand(_history.Selection));
         }
@@ -1805,7 +2243,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public void DeleteWordForward()
     {
-        if (IsEditingEnabled)
+        if (IsEditingEnabled && IsSelectionInActiveEditingScope())
         {
             ExecuteEdit(new DeleteWordForwardCommand(_history.Selection));
         }
@@ -1813,7 +2251,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public void SplitParagraph()
     {
-        if (IsEditingEnabled)
+        if (IsEditingEnabled && IsSelectionInActiveEditingScope())
         {
             ExecuteEdit(new SplitParagraphCommand(_history.Selection));
         }
@@ -1821,7 +2259,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public void InsertSoftBreak()
     {
-        if (IsEditingEnabled)
+        if (IsEditingEnabled && IsSelectionInActiveEditingScope())
         {
             ExecuteEdit(new InsertSoftBreakCommand(_history.Selection));
         }
@@ -1886,6 +2324,20 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         FinishEdit();
     }
 
+    private bool IsSelectionInActiveEditingScope()
+    {
+        if (ActiveHeaderFooterKind is not { } kind)
+        {
+            return true;
+        }
+
+        var zone = Document.FindHeaderFooterZone(_history.Selection.Focus.ParagraphId);
+
+        return zone is { } value
+            && value.Kind == kind
+            && Document.Sections[value.SectionIndex].Id == ActiveHeaderFooterSectionId;
+    }
+
     private void ExecuteEdit(DocumentEditCommand command)
     {
         _history.Execute(command);
@@ -1898,6 +2350,18 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         Layout = _layoutEngine.Layout(_history.Current);
         IsModified = true;
         SyncSelectionFromHistory();
+
+        if (ActiveHeaderFooterKind is { } activeKind)
+        {
+            var zone = Document.FindHeaderFooterZone(_history.Selection.Focus.ParagraphId);
+
+            if (zone is null || zone.Value.Kind != activeKind)
+            {
+                ActiveHeaderFooterKind = null;
+                ActiveHeaderFooterSectionId = Guid.Empty;
+            }
+        }
+
         NotifyHistoryCommands();
         RefreshCharacterFormattingState();
         RefreshParagraphFormattingState();
@@ -2107,8 +2571,19 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         OnPropertyChanged(nameof(CanRemoveImage));
         EditImageCommand.NotifyCanExecuteChanged();
         RemoveImageCommand.NotifyCanExecuteChanged();
+        NotifyHeaderFooterCommands();
         NotifyClipboardCommands();
     }
+
+    partial void OnActiveHeaderFooterKindChanged(HeaderFooterKind? value)
+    {
+        OnPropertyChanged(nameof(IsHeaderFooterMode));
+        OnPropertyChanged(nameof(HeaderFooterModeLabel));
+        NotifyHeaderFooterCommands();
+    }
+
+    partial void OnActiveHeaderFooterVariantChanged(HeaderFooterVariant value) =>
+        OnPropertyChanged(nameof(HeaderFooterModeLabel));
 
     partial void OnErrorMessageChanged(string value) =>
         OnPropertyChanged(nameof(HasError));
@@ -2390,6 +2865,9 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         FilePath = filePath ?? string.Empty;
         DocumentTitle = document.Title;
         Document = document;
+        ActiveHeaderFooterKind = null;
+        ActiveHeaderFooterSectionId = Guid.Empty;
+        _bodySelectionBeforeHeaderFooter = default;
         IsModified = false;
         SyncSelectionFromHistory();
         Layout = _layoutEngine.Layout(document);
@@ -2635,7 +3113,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         var selection = SelectionMap.Normalize(_history.Selection, Document);
         var start = selection.GetStart(Document);
         var end = selection.GetEnd(Document);
-        var paragraphs = Document.EnumerateParagraphs().ToList();
+        var paragraphs = Document.EnumerateAllParagraphs().ToList();
         var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
         var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
 
@@ -3009,7 +3487,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         }
 
         var selection = SelectionMap.Normalize(_history.Selection, Document);
-        var paragraphs = Document.EnumerateParagraphs().ToList();
+        var paragraphs = Document.EnumerateAllParagraphs().ToList();
 
         if (selection.IsCollapsed)
         {

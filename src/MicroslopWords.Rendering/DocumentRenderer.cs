@@ -111,7 +111,9 @@ public sealed class DocumentRenderer
             .Concat(page.Tables
                 .SelectMany(table => table.Rows)
                 .SelectMany(row => row.Cells)
-                .SelectMany(cell => cell.Paragraphs));
+                .SelectMany(cell => cell.Paragraphs))
+            .Concat(page.Header?.Paragraphs ?? [])
+            .Concat(page.Footer?.Paragraphs ?? []);
 
     public byte[] RenderPagePng(PageLayout page, float scale = 1f)
     {
