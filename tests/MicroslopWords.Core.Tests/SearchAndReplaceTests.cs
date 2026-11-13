@@ -274,6 +274,60 @@ public sealed class SearchAndReplaceTests
         history.Current.FindTable(table.Id).ShouldNotBeNull();
     }
 
+    [Fact]
+    public void ReplaceAll_preserves_inline_images_in_the_paragraph()
+    {
+        var image = new InlineImage(
+            ImageFormat.Png,
+            "image.png",
+            ImmutableArray.Create<byte>(1, 2, 3),
+            1,
+            1,
+            20,
+            20);
+        var imageRun = Run.CreateImage(image);
+        var paragraph = ParagraphWithRuns(
+            Run.Create("before "),
+            imageRun,
+            Run.Create(" after"));
+        var document = CreateDocument(paragraph);
+        var history = new CommandHistory(document);
+
+        history.Execute(new ReplaceAllCommand(
+            history.Selection,
+            "before",
+            "BEFORE"));
+
+        var updated = Paragraphs(history.Current).Single();
+        updated.PlainText.ShouldBe("BEFORE \uFFFC after");
+        var preserved = updated.Runs.Single(run => run.EffectiveImage is not null);
+        preserved.Id.ShouldBe(imageRun.Id);
+        preserved.Image.ShouldBeSameAs(image);
+    }
+
+    [Fact]
+    public void ReplaceAll_preserves_page_field_runs()
+    {
+        var field = Run.CreatePageField(PageFieldKind.PageNumber);
+        var paragraph = ParagraphWithRuns(
+            Run.Create("page "),
+            field,
+            Run.Create(" end"));
+        var document = CreateDocument(paragraph);
+        var history = new CommandHistory(document);
+
+        history.Execute(new ReplaceAllCommand(
+            history.Selection,
+            "page",
+            "PAGE"));
+
+        var updated = Paragraphs(history.Current).Single();
+        updated.PlainText.ShouldBe("PAGE  end");
+        var preserved = updated.Runs.Single(run => run.PageField is not null);
+        preserved.Id.ShouldBe(field.Id);
+        preserved.PageField.ShouldBe(PageFieldKind.PageNumber);
+    }
+
     private static (Document Document, TableBlock Table, Guid ParagraphId)
         CreateTableDocument(string cellText)
     {
