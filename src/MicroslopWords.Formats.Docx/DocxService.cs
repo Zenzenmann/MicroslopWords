@@ -67,19 +67,36 @@ public static class DocxService
                     diagnostics.Add(new Diagnostic(code, DiagnosticSeverity.Warning, message));
                 }
             }
-            if (mainPart.HeaderParts.Any() || mainPart.FooterParts.Any())
-            {
-                Report(
-                    DocxDiagnosticCodes.UnsupportedHeaderFooter,
-                    "Headers and footers are not shown in this preview."
-                );
-            }
             var styleSheet = LoadStyles(mainPart, Report);
             var blocks = ImmutableArray.CreateBuilder<Block>();
+            var sections = ImmutableArray.CreateBuilder<Section>();
             var numbering = mainPart.NumberingDefinitionsPart?.Numbering;
             var listIds = new Dictionary<long, Guid>();
             var images = new Dictionary<string, ImportedImage>(StringComparer.Ordinal);
             SectionProperties? sectionProperties = null;
+
+            void FlushSection(SectionProperties? properties)
+            {
+                if (blocks.Count == 0)
+                {
+                    blocks.Add(ParagraphBlock.Create());
+                }
+
+                sections.Add(
+                    ToSection(
+                        blocks.ToImmutable(),
+                        properties,
+                        sections.Count,
+                        mainPart,
+                        images,
+                        Report,
+                        numbering,
+                        listIds
+                    )
+                );
+                blocks.Clear();
+            }
+
             foreach (var element in body.ChildElements)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -96,6 +113,10 @@ public static class DocxService
                                 listIds
                             )
                         );
+                        if (paragraph.ParagraphProperties?.SectionProperties is { } paragraphSection)
+                        {
+                            FlushSection(paragraphSection);
+                        }
                         break;
                     case WpTable table:
                         blocks.Add(
@@ -113,19 +134,12 @@ public static class DocxService
                         break;
                 }
             }
-            if (blocks.Count == 0)
-            {
-                blocks.Add(ParagraphBlock.Create());
-            }
-            var section = new Section(
-                Guid.NewGuid(),
-                blocks.ToImmutable(),
-                ToPageSettings(sectionProperties)
-            );
+
+            FlushSection(sectionProperties);
             var document = new CoreDocument(
                 Guid.NewGuid(),
                 title ?? "Imported document",
-                ImmutableArray.Create(section),
+                sections.ToImmutable(),
                 styleSheet
             );
             return OperationResult.Success(document, diagnostics.ToImmutable());
@@ -162,49 +176,81 @@ public static class DocxService
         var numberingIds = PrepareNumbering(mainPart, document);
         var imageRelationships = new Dictionary<string, string>(StringComparer.Ordinal);
         var nextDrawingId = 1u;
-        foreach (var block in document.Sections.SelectMany(section => section.Blocks))
+        var sections = document.Sections.Length == 0
+            ? ImmutableArray.Create(Section.CreateEmpty())
+            : document.Sections;
+
+        for (var sectionIndex = 0; sectionIndex < sections.Length; sectionIndex++)
         {
-            if (block is ParagraphBlock paragraphBlock)
+            var section = sections[sectionIndex];
+            WpParagraph? lastParagraph = null;
+
+            foreach (var block in section.Blocks)
             {
-                AppendParagraph(
-                    body,
-                    paragraphBlock,
-                    numberingIds,
-                    mainPart,
-                    imageRelationships,
-                    ref nextDrawingId
-                );
-            }
-            else if (block is CoreTableBlock tableBlock)
-            {
-                body.Append(
-                    ToWordTable(
-                        tableBlock,
+                if (block is ParagraphBlock paragraphBlock)
+                {
+                    lastParagraph = AppendParagraph(
+                        body,
+                        paragraphBlock,
                         numberingIds,
                         mainPart,
                         imageRelationships,
                         ref nextDrawingId
-                    )
-                );
+                    );
+                }
+                else if (block is CoreTableBlock tableBlock)
+                {
+                    body.Append(
+                        ToWordTable(
+                            tableBlock,
+                            numberingIds,
+                            mainPart,
+                            imageRelationships,
+                            ref nextDrawingId
+                        )
+                    );
+                    lastParagraph = null;
+                }
+            }
+
+            var sectionProperties = ToSectionProperties(
+                section,
+                sectionIndex,
+                mainPart,
+                numberingIds,
+                ref nextDrawingId
+            );
+
+            if (sectionIndex < sections.Length - 1)
+            {
+                if (lastParagraph is null)
+                {
+                    lastParagraph = new WpParagraph();
+                    body.Append(lastParagraph);
+                }
+
+                lastParagraph.ParagraphProperties ??= new WpParagraphProperties();
+                lastParagraph.ParagraphProperties.Append(sectionProperties);
+            }
+            else
+            {
+                body.Append(sectionProperties);
             }
         }
+
         if (!body.Elements<WpParagraph>().Any() && !body.Elements<WpTable>().Any())
         {
             body.Append(new WpParagraph());
         }
-        body.Append(
-            ToSectionProperties(
-                document.Sections.FirstOrDefault()?.EffectivePage ?? PageSettings.Letter
-            )
-        );
+
         mainPart.Document.Save();
     }
 
-    private static void AppendParagraph(
+    private static WpParagraph AppendParagraph(
         OpenXmlElement parent,
         ParagraphBlock paragraphBlock,
         Dictionary<Guid, int> numberingIds,
-        MainDocumentPart mainPart,
+        OpenXmlPart ownerPart,
         Dictionary<string, string> imageRelationships,
         ref uint nextDrawingId
     )
@@ -221,6 +267,32 @@ public static class DocxService
         }
         foreach (var run in paragraphBlock.Runs)
         {
+            if (run.PageField is { } pageField)
+            {
+                var simpleField = new SimpleField
+                {
+                    Instruction = pageField == PageFieldKind.PageNumber
+                        ? " PAGE "
+                        : " NUMPAGES ",
+                };
+                var fieldRun = new WpRun();
+                var fieldProperties = ToWordRunProperties(run.Properties);
+
+                if (fieldProperties is not null)
+                {
+                    fieldRun.Append(fieldProperties);
+                }
+
+                fieldRun.Append(
+                    new WpText("1")
+                    {
+                        Space = SpaceProcessingModeValues.Preserve,
+                    });
+                simpleField.Append(fieldRun);
+                paragraph.Append(simpleField);
+                continue;
+            }
+
             var wpRun = new WpRun();
             var wordProperties = ToWordRunProperties(run.Properties);
             if (wordProperties is not null)
@@ -231,7 +303,7 @@ public static class DocxService
             {
                 if (!image.IsPlaceholder)
                 {
-                    var relationshipId = GetOrCreateImagePart(mainPart, image, imageRelationships);
+                    var relationshipId = GetOrCreateImagePart(ownerPart, image, imageRelationships);
                     wpRun.Append(BuildInlineImage(image, relationshipId, nextDrawingId++));
                 }
             }
@@ -242,12 +314,13 @@ public static class DocxService
             paragraph.Append(wpRun);
         }
         parent.Append(paragraph);
+        return paragraph;
     }
 
     private static WpTable ToWordTable(
         CoreTableBlock table,
         Dictionary<Guid, int> numberingIds,
-        MainDocumentPart mainPart,
+        OpenXmlPart ownerPart,
         Dictionary<string, string> imageRelationships,
         ref uint nextDrawingId
     )
@@ -319,7 +392,7 @@ public static class DocxService
                         wordCell,
                         paragraph,
                         numberingIds,
-                        mainPart,
+                        ownerPart,
                         imageRelationships,
                         ref nextDrawingId
                     );
@@ -358,7 +431,7 @@ public static class DocxService
         };
 
     private static string GetOrCreateImagePart(
-        MainDocumentPart mainPart,
+        OpenXmlPart ownerPart,
         InlineImage image,
         Dictionary<string, string> relationships
     )
@@ -376,15 +449,26 @@ public static class DocxService
             ImageFormat.Gif => ImagePartType.Gif,
             _ => ImagePartType.Png,
         };
-        var part = mainPart.AddImagePart(partType);
+        var part = AddImagePart(ownerPart, partType);
         using (var stream = new MemoryStream(image.Data.ToArray(), writable: false))
         {
             part.FeedData(stream);
         }
-        var relationshipId = mainPart.GetIdOfPart(part);
+        var relationshipId = ownerPart.GetIdOfPart(part);
         relationships[key] = relationshipId;
         return relationshipId;
     }
+
+    private static ImagePart AddImagePart(OpenXmlPart ownerPart, PartTypeInfo partType) =>
+        ownerPart switch
+        {
+            MainDocumentPart mainPart => mainPart.AddImagePart(partType),
+            HeaderPart headerPart => headerPart.AddImagePart(partType),
+            FooterPart footerPart => footerPart.AddImagePart(partType),
+            _ => throw new InvalidOperationException(
+                "Images are not supported in this package part."
+            ),
+        };
 
     private static WpDrawing BuildInlineImage(
         InlineImage image,
@@ -411,7 +495,7 @@ public static class DocxService
                 new A.GraphicData(
                     new Pic.Picture(
                         new Pic.NonVisualPictureProperties(
-                            new A.NonVisualDrawingProperties
+                            new Pic.NonVisualDrawingProperties
                             {
                                 Id = drawingId,
                                 Name = name,
@@ -700,6 +784,204 @@ public static class DocxService
     private static string ToTwips(double points) =>
         ((int)Math.Round(points * 20)).ToString(CultureInfo.InvariantCulture);
 
+    private static Section ToSection(
+        ImmutableArray<Block> blocks,
+        SectionProperties? properties,
+        int sectionIndex,
+        MainDocumentPart mainPart,
+        Dictionary<string, ImportedImage> images,
+        Action<string, string> report,
+        Numbering? numbering,
+        Dictionary<long, Guid> listIds)
+    {
+        HeaderFooter? header = null;
+        HeaderFooter? firstPageHeader = null;
+        HeaderFooter? footer = null;
+        HeaderFooter? firstPageFooter = null;
+
+        foreach (var reference in properties?.Elements<HeaderReference>() ?? [])
+        {
+            var type = reference.Type?.Value;
+
+            if (type == HeaderFooterValues.Even)
+            {
+                report(
+                    DocxDiagnosticCodes.UnsupportedHeaderFooter,
+                    "Even-page headers are not supported."
+                );
+                continue;
+            }
+
+            if (FindRelatedPart(mainPart, reference.Id?.Value) is not HeaderPart part)
+            {
+                continue;
+            }
+
+            if (part.Header?.Elements<WpTable>().Any() == true)
+            {
+                report(
+                    DocxDiagnosticCodes.UnsupportedTable,
+                    "Tables in headers and footers are not supported."
+                );
+            }
+
+            var content = ToHeaderFooter(
+                part,
+                part.Header?.Elements<WpParagraph>() ?? [],
+                images,
+                report,
+                numbering,
+                listIds);
+
+            if (type == HeaderFooterValues.First)
+            {
+                firstPageHeader = content;
+            }
+            else
+            {
+                header = content;
+            }
+        }
+
+        foreach (var reference in properties?.Elements<FooterReference>() ?? [])
+        {
+            var type = reference.Type?.Value;
+
+            if (type == HeaderFooterValues.Even)
+            {
+                report(
+                    DocxDiagnosticCodes.UnsupportedHeaderFooter,
+                    "Even-page footers are not supported."
+                );
+                continue;
+            }
+
+            if (FindRelatedPart(mainPart, reference.Id?.Value) is not FooterPart part)
+            {
+                continue;
+            }
+
+            if (part.Footer?.Elements<WpTable>().Any() == true)
+            {
+                report(
+                    DocxDiagnosticCodes.UnsupportedTable,
+                    "Tables in headers and footers are not supported."
+                );
+            }
+
+            var content = ToHeaderFooter(
+                part,
+                part.Footer?.Elements<WpParagraph>() ?? [],
+                images,
+                report,
+                numbering,
+                listIds);
+
+            if (type == HeaderFooterValues.First)
+            {
+                firstPageFooter = content;
+            }
+            else
+            {
+                footer = content;
+            }
+        }
+
+        var pageNumber = properties?.GetFirstChild<PageNumberType>();
+
+        return new Section(
+            Guid.NewGuid(),
+            blocks,
+            ToPageSettings(properties),
+            header,
+            footer,
+            firstPageHeader,
+            firstPageFooter,
+            properties?.GetFirstChild<TitlePage>() is not null,
+            header is null && firstPageHeader is null && sectionIndex > 0,
+            footer is null && firstPageFooter is null && sectionIndex > 0,
+            pageNumber?.Start?.Value,
+            ToPageNumberFormat(pageNumber?.Format?.Value));
+    }
+
+    private static HeaderFooter? ToHeaderFooter(
+        OpenXmlPart part,
+        IEnumerable<WpParagraph> paragraphs,
+        Dictionary<string, ImportedImage> images,
+        Action<string, string> report,
+        Numbering? numbering,
+        Dictionary<long, Guid> listIds)
+    {
+        var blocks = paragraphs
+            .Select(paragraph => (Block)ToParagraphBlock(
+                paragraph,
+                part,
+                images,
+                report,
+                numbering,
+                listIds))
+            .ToImmutableArray();
+
+        return blocks.Length == 0 ? null : new HeaderFooter(blocks);
+    }
+
+    private static OpenXmlPart? FindRelatedPart(
+        MainDocumentPart mainPart,
+        string? relationshipId)
+    {
+        if (string.IsNullOrEmpty(relationshipId))
+        {
+            return null;
+        }
+
+        try
+        {
+            return mainPart.GetPartById(relationshipId);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentOutOfRangeException or KeyNotFoundException)
+        {
+            return null;
+        }
+    }
+
+    private static PageNumberFormat? ToPageNumberFormat(NumberFormatValues? value)
+    {
+        if (value is null)
+        {
+            return null;
+        }
+
+        var format = value.Value;
+
+        if (format == NumberFormatValues.Decimal)
+        {
+            return PageNumberFormat.DecimalNumber;
+        }
+
+        if (format == NumberFormatValues.UpperRoman)
+        {
+            return PageNumberFormat.UpperRoman;
+        }
+
+        if (format == NumberFormatValues.LowerRoman)
+        {
+            return PageNumberFormat.LowerRoman;
+        }
+
+        if (format == NumberFormatValues.UpperLetter)
+        {
+            return PageNumberFormat.UpperAlphabetic;
+        }
+
+        if (format == NumberFormatValues.LowerLetter)
+        {
+            return PageNumberFormat.LowerAlphabetic;
+        }
+
+        return null;
+    }
+
     private static PageSettings ToPageSettings(SectionProperties? properties)
     {
         var size = properties?.GetFirstChild<PageSize>();
@@ -723,8 +1005,63 @@ public static class DocxService
         };
     }
 
-    private static SectionProperties ToSectionProperties(PageSettings page) =>
-        new(
+    private static SectionProperties ToSectionProperties(
+        Section section,
+        int sectionIndex,
+        MainDocumentPart mainPart,
+        Dictionary<Guid, int> numberingIds,
+        ref uint nextDrawingId)
+    {
+        var properties = new SectionProperties();
+
+        if (!section.LinkHeaderToPrevious || sectionIndex == 0)
+        {
+            AddHeaderFooterReference(
+                properties,
+                section,
+                HeaderFooterKind.Header,
+                HeaderFooterVariant.Default,
+                mainPart,
+                numberingIds,
+                ref nextDrawingId);
+
+            if (section.DifferentFirstPage)
+            {
+                AddHeaderFooterReference(
+                    properties,
+                    section,
+                    HeaderFooterKind.Header,
+                    HeaderFooterVariant.FirstPage,
+                    mainPart,
+                    numberingIds,
+                    ref nextDrawingId);
+            }
+
+            AddHeaderFooterReference(
+                properties,
+                section,
+                HeaderFooterKind.Footer,
+                HeaderFooterVariant.Default,
+                mainPart,
+                numberingIds,
+                ref nextDrawingId);
+
+            if (section.DifferentFirstPage)
+            {
+                AddHeaderFooterReference(
+                    properties,
+                    section,
+                    HeaderFooterKind.Footer,
+                    HeaderFooterVariant.FirstPage,
+                    mainPart,
+                    numberingIds,
+                    ref nextDrawingId);
+            }
+        }
+
+        var page = section.EffectivePage;
+
+        properties.Append(
             new PageSize
             {
                 Width = (uint)Math.Round(page.EffectiveWidthPoints * 20),
@@ -733,15 +1070,132 @@ public static class DocxService
                     page.Orientation == PageOrientation.Landscape
                         ? PageOrientationValues.Landscape
                         : PageOrientationValues.Portrait,
-            },
+            });
+
+        properties.Append(
             new PageMargin
             {
                 Left = (uint)Math.Round(page.MarginLeftPoints * 20),
                 Top = (int)Math.Round(page.MarginTopPoints * 20),
                 Right = (uint)Math.Round(page.MarginRightPoints * 20),
                 Bottom = (int)Math.Round(page.MarginBottomPoints * 20),
+            });
+
+        if (section.PageNumberStart is not null || section.PageNumberFormat is not null)
+        {
+            var pageNumber = new PageNumberType();
+
+            if (section.PageNumberStart is { } start)
+            {
+                pageNumber.Start = start;
             }
-        );
+
+            if (section.PageNumberFormat is { } format)
+            {
+                pageNumber.Format = ToWordPageNumberFormat(format);
+            }
+
+            properties.Append(pageNumber);
+        }
+
+        if (section.DifferentFirstPage)
+        {
+            properties.Append(new TitlePage());
+        }
+
+        return properties;
+    }
+
+    private static void AddHeaderFooterReference(
+        SectionProperties properties,
+        Section section,
+        HeaderFooterKind kind,
+        HeaderFooterVariant variant,
+        MainDocumentPart mainPart,
+        Dictionary<Guid, int> numberingIds,
+        ref uint nextDrawingId)
+    {
+        var content = section.GetHeaderFooter(kind, variant);
+
+        if (content is null || !content.HasVisibleContent)
+        {
+            return;
+        }
+
+        var imageRelationships = new Dictionary<string, string>(StringComparer.Ordinal);
+
+        if (kind == HeaderFooterKind.Header)
+        {
+            var part = mainPart.AddNewPart<HeaderPart>();
+            var header = new Header();
+
+            foreach (var block in content.Blocks)
+            {
+                if (block is ParagraphBlock paragraph)
+                {
+                    AppendParagraph(
+                        header,
+                        paragraph,
+                        numberingIds,
+                        part,
+                        imageRelationships,
+                        ref nextDrawingId);
+                }
+            }
+
+            part.Header = header;
+            properties.Append(
+                new HeaderReference
+                {
+                    Type = ToWordHeaderFooterValues(variant),
+                    Id = mainPart.GetIdOfPart(part),
+                });
+        }
+        else
+        {
+            var part = mainPart.AddNewPart<FooterPart>();
+            var footer = new Footer();
+
+            foreach (var block in content.Blocks)
+            {
+                if (block is ParagraphBlock paragraph)
+                {
+                    AppendParagraph(
+                        footer,
+                        paragraph,
+                        numberingIds,
+                        part,
+                        imageRelationships,
+                        ref nextDrawingId);
+                }
+            }
+
+            part.Footer = footer;
+            properties.Append(
+                new FooterReference
+                {
+                    Type = ToWordHeaderFooterValues(variant),
+                    Id = mainPart.GetIdOfPart(part),
+                });
+        }
+    }
+
+    private static HeaderFooterValues ToWordHeaderFooterValues(
+        HeaderFooterVariant variant) =>
+        variant == HeaderFooterVariant.FirstPage
+            ? HeaderFooterValues.First
+            : HeaderFooterValues.Default;
+
+    private static NumberFormatValues ToWordPageNumberFormat(
+        PageNumberFormat format) =>
+        format switch
+        {
+            PageNumberFormat.UpperRoman => NumberFormatValues.UpperRoman,
+            PageNumberFormat.LowerRoman => NumberFormatValues.LowerRoman,
+            PageNumberFormat.UpperAlphabetic => NumberFormatValues.UpperLetter,
+            PageNumberFormat.LowerAlphabetic => NumberFormatValues.LowerLetter,
+            _ => NumberFormatValues.Decimal,
+        };
 
     private static CoreRunProperties? ToRunProperties(WpRunProperties? properties) =>
         properties is null
@@ -1232,7 +1686,7 @@ public static class DocxService
 
     private static InlineImage? TryCreateInlineImage(
         WpDrawing drawing,
-        MainDocumentPart mainPart,
+        OpenXmlPart ownerPart,
         Dictionary<string, ImportedImage> images,
         Action<string, string> report
     )
@@ -1271,12 +1725,14 @@ public static class DocxService
             );
             return CreatePlaceholder(width, height, name, altText);
         }
-        if (!images.TryGetValue(relationshipId, out var imported))
+        var cacheKey = $"{ownerPart.Uri}#{relationshipId}";
+
+        if (!images.TryGetValue(cacheKey, out var imported))
         {
             ImagePart? part;
             try
             {
-                part = mainPart.GetPartById(relationshipId) as ImagePart;
+                part = ownerPart.GetPartById(relationshipId) as ImagePart;
             }
             catch (Exception exception)
                 when (exception is ArgumentOutOfRangeException or KeyNotFoundException)
@@ -1317,7 +1773,7 @@ public static class DocxService
                 inspected.Value.PixelWidth,
                 inspected.Value.PixelHeight
             );
-            images[relationshipId] = imported;
+            images[cacheKey] = imported;
         }
         if (width <= 0 || height <= 0)
         {
@@ -1368,7 +1824,7 @@ public static class DocxService
 
     private static CoreTableBlock ToTableBlock(
         WpTable table,
-        MainDocumentPart mainPart,
+        OpenXmlPart ownerPart,
         Dictionary<string, ImportedImage> images,
         Action<string, string> report,
         Numbering? numbering,
@@ -1445,7 +1901,7 @@ public static class DocxService
                 var paragraphs = cellElement
                     .Elements<WpParagraph>()
                     .Select(paragraph =>
-                        ToParagraphBlock(paragraph, mainPart, images, report, numbering, listIds)
+                        ToParagraphBlock(paragraph, ownerPart, images, report, numbering, listIds)
                     )
                     .ToImmutableArray();
                 if (paragraphs.Length == 0)
@@ -1598,7 +2054,7 @@ public static class DocxService
 
     private static ParagraphBlock ToParagraphBlock(
         WpParagraph paragraph,
-        MainDocumentPart mainPart,
+        OpenXmlPart ownerPart,
         Dictionary<string, ImportedImage> images,
         Action<string, string> report,
         Numbering? numbering,
@@ -1619,17 +2075,6 @@ public static class DocxService
                 "Legacy or vector images are not supported and were skipped."
             );
         }
-        if (
-            paragraph.Descendants<FieldChar>().Any()
-            || paragraph.Descendants<FieldCode>().Any()
-            || paragraph.Descendants<SimpleField>().Any()
-        )
-        {
-            report(
-                DocxDiagnosticCodes.UnsupportedField,
-                "Fields are not evaluated in this preview."
-            );
-        }
         if (paragraph.Descendants<InsertedRun>().Any() || paragraph.Descendants<DeletedRun>().Any())
         {
             report(
@@ -1637,10 +2082,128 @@ public static class DocxService
                 "Tracked changes are not shown in this preview."
             );
         }
+
+        var simpleFieldFirstRuns = new Dictionary<WpRun, PageFieldKind>();
+        var simpleFieldRuns = new HashSet<WpRun>();
+        var unsupportedFieldReported = false;
+
+        void ReportUnsupportedField()
+        {
+            if (!unsupportedFieldReported)
+            {
+                unsupportedFieldReported = true;
+                report(
+                    DocxDiagnosticCodes.UnsupportedField,
+                    "Only PAGE and NUMPAGES fields are evaluated in headers and footers."
+                );
+            }
+        }
+
+        foreach (var field in paragraph.Descendants<SimpleField>())
+        {
+            var kind = ParsePageFieldInstruction(field.Instruction?.Value);
+
+            if (kind is null)
+            {
+                ReportUnsupportedField();
+                continue;
+            }
+
+            var firstRun = field.Descendants<WpRun>().FirstOrDefault();
+
+            if (firstRun is not null)
+            {
+                simpleFieldFirstRuns[firstRun] = kind.Value;
+            }
+
+            foreach (var fieldRun in field.Descendants<WpRun>())
+            {
+                simpleFieldRuns.Add(fieldRun);
+            }
+        }
+
         var runs = ImmutableArray.CreateBuilder<CoreRun>();
+        var inField = false;
+        var inFieldResult = false;
+        var fieldEmitted = false;
+        PageFieldKind? pendingField = null;
+
         foreach (var run in paragraph.Descendants<WpRun>())
         {
             var properties = ToRunProperties(run.GetFirstChild<WpRunProperties>());
+
+            if (simpleFieldFirstRuns.TryGetValue(run, out var simpleFieldKind))
+            {
+                runs.Add(CoreRun.CreatePageField(simpleFieldKind, properties));
+                continue;
+            }
+
+            if (simpleFieldRuns.Contains(run))
+            {
+                continue;
+            }
+
+            var fieldChar = run.GetFirstChild<FieldChar>();
+
+            if (fieldChar is not null)
+            {
+                var fieldType = fieldChar.FieldCharType?.Value;
+
+                if (fieldType == FieldCharValues.Begin)
+                {
+                    inField = true;
+                    inFieldResult = false;
+                    fieldEmitted = false;
+                    pendingField = null;
+                }
+                else if (fieldType == FieldCharValues.Separate)
+                {
+                    inFieldResult = true;
+
+                    if (pendingField is { } separatedKind && !fieldEmitted)
+                    {
+                        runs.Add(CoreRun.CreatePageField(separatedKind, properties));
+                        fieldEmitted = true;
+                    }
+                }
+                else if (fieldType == FieldCharValues.End)
+                {
+                    if (inField
+                        && pendingField is { } endedKind
+                        && !fieldEmitted)
+                    {
+                        runs.Add(CoreRun.CreatePageField(endedKind, properties));
+                    }
+
+                    inField = false;
+                    inFieldResult = false;
+                    fieldEmitted = false;
+                    pendingField = null;
+                }
+
+                continue;
+            }
+
+            if (inField)
+            {
+                if (!inFieldResult)
+                {
+                    var instruction = run.GetFirstChild<FieldCode>()?.Text;
+                    var kind = ParsePageFieldInstruction(instruction);
+
+                    if (kind is null)
+                    {
+                        ReportUnsupportedField();
+                    }
+                    else
+                    {
+                        pendingField = kind;
+                    }
+                }
+
+                continue;
+            }
+
             var text = new StringBuilder();
             void FlushText()
             {
@@ -1690,7 +2253,7 @@ public static class DocxService
                         break;
                     case WpDrawing drawing:
                         FlushText();
-                        var image = TryCreateInlineImage(drawing, mainPart, images, report);
+                        var image = TryCreateInlineImage(drawing, ownerPart, images, report);
                         if (image is not null)
                         {
                             runs.Add(CoreRun.CreateImage(image, properties));
@@ -1711,6 +2274,27 @@ public static class DocxService
             runs.ToImmutable(),
             ToParagraphProperties(paragraph.ParagraphProperties, numbering, listIds)
         );
+    }
+
+    private static PageFieldKind? ParsePageFieldInstruction(string? instruction)
+    {
+        if (string.IsNullOrWhiteSpace(instruction))
+        {
+            return null;
+        }
+
+        var token = instruction
+            .Trim()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault()
+            ?.ToUpperInvariant();
+
+        return token switch
+        {
+            "PAGE" => PageFieldKind.PageNumber,
+            "NUMPAGES" => PageFieldKind.TotalPages,
+            _ => null,
+        };
     }
 
     private static CoreParagraphProperties? ToParagraphProperties(

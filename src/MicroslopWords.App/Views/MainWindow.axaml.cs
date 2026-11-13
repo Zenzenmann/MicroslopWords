@@ -1,4 +1,5 @@
 using Avalonia.Controls;
+using MicroslopWords.App.Controls;
 using MicroslopWords.App.ViewModels;
 
 namespace MicroslopWords.App.Views;
@@ -16,6 +17,16 @@ public partial class MainWindow : Window
         if (DataContext is MainViewModel viewModel)
         {
             viewModel.SetViewport(e.NewSize.Width, e.NewSize.Height);
+        }
+    }
+
+    private void OnHeaderFooterZoneActivated(
+        object? sender,
+        HeaderFooterZoneEventArgs e)
+    {
+        if (DataContext is MainViewModel viewModel)
+        {
+            viewModel.HandleHeaderFooterZoneActivated(e.Kind, e.SectionId);
         }
     }
 }

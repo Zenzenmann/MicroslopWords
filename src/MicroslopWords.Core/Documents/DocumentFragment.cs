@@ -72,7 +72,7 @@ public sealed record DocumentFragment(ImmutableArray<ParagraphFragment> Paragrap
         TextPosition start,
         TextPosition end)
     {
-        var paragraphs = document.EnumerateParagraphs().ToImmutableArray();
+        var paragraphs = document.EnumerateAllParagraphs().ToImmutableArray();
         var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
         var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
 

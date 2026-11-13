@@ -4,10 +4,16 @@ public sealed record Run(
     Guid Id,
     string Text,
     RunProperties? Properties = null,
-    InlineImage? Image = null)
+    InlineImage? Image = null,
+    PageFieldKind? PageField = null)
 {
     public static Run Create(string text, RunProperties? properties = null) =>
         new(Guid.NewGuid(), text, properties);
+
+    public static Run CreatePageField(
+        PageFieldKind kind,
+        RunProperties? properties = null) =>
+        new(Guid.NewGuid(), string.Empty, properties, PageField: kind);
 
     public static Run CreateImage(
         InlineImage image,
@@ -34,4 +40,6 @@ public sealed record Run(
             : null;
 
     public bool IsImage => EffectiveImage is not null;
+
+    public bool IsPageField => PageField is not null;
 }
