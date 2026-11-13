@@ -642,8 +642,8 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         SetHighlight(highlight);
     }
 
-    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
-    private void Find() => StatusText = "Find is planned for STORY-011.";
+    [RelayCommand]
+    private void Find() => OpenFindPanel();
 
     public void SetFontFamily(string family) =>
         ApplyCharacterProperties(run => run with { FontFamily = family });
