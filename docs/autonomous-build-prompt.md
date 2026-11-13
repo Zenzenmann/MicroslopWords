@@ -146,8 +146,8 @@ Fix failures and re-run. You get at most **3 fix attempts per failure class**; a
 git add -A
 git commit -m "STORY-NNN: <story title>"
 git fetch origin
-git rebase origin/main
-# re-run build, test, format, and git diff --check after the rebase
+git merge origin/main
+# re-run build, test, format, and git diff --check after the merge
 git push -u origin story/STORY-NNN
 gh pr create --base main --head story/STORY-NNN --title "STORY-NNN: <title>" --body "<summary, gates run, risks, open questions>"
 gh pr checks story/STORY-NNN --watch --fail-fast
@@ -157,13 +157,13 @@ gh pr merge story/STORY-NNN --merge
 If the story has an unresolved `spec_checkpoint` or `done_checkpoint`, or needs human review, stop after `gh pr create` and report the PR URL. Do not merge it.
 
 - Do not merge a PR while CI is failing or still running.
-- If `gh pr merge` fails because the branch is behind `main`, rebase, rerun the gates, push, wait for checks, and retry. Stop after 3 attempts.
+- If `gh pr merge` fails because the branch is behind `main`, merge `origin/main` into the story branch, rerun the gates, push, wait for checks, and retry. Stop after 3 attempts.
 - If conflicts are non-trivial or outside your story, stop and report instead of guessing.
 - After the merge, switch to `main` in the integration worktree and pull; in a worker worktree, `git fetch origin` and start the next story from `origin/main`.
 - The designated integrator (or the integration worktree) runs post-merge build/test/format. If a post-merge gate fails, open a revert PR and stop.
 - Never use `gh pr merge --admin`; it bypasses the protection this workflow depends on.
 
-Never force-push, never rewrite `main`, and never merge with failing gates, unresolved conflicts, protected-file changes, or possible secrets.
+Never force-push `main` or rewrite published history. If you rebase your own story branch, update it with `git push --force-with-lease`; never force-push a branch you do not own. Never merge with failing gates, unresolved conflicts, protected-file changes, or possible secrets.
 
 ## 8. Continue or stop
 
