@@ -103,6 +103,31 @@ public sealed class FindUiTests
     }
 
     [Fact]
+    public void Find_next_selects_text_inside_a_table()
+    {
+        using var viewModel = new MainViewModel();
+        viewModel.ApplyEdit(new InsertTableCommand(
+            viewModel.Selection,
+            rows: 2,
+            columns: 2,
+            hasHeaderRow: false));
+        viewModel.InsertText("table text");
+
+        viewModel.FindCommand.Execute(null);
+        viewModel.FindQuery = "table";
+
+        viewModel.FindMatchCount.ShouldBe(1);
+
+        viewModel.FindNextCommand.Execute(null);
+
+        viewModel.Selection.IsCollapsed.ShouldBeFalse();
+        var paragraph = viewModel.Document.FindParagraph(
+            viewModel.Selection.Focus.ParagraphId);
+        paragraph.ShouldNotBeNull();
+        paragraph.PlainText.ShouldBe("table text");
+    }
+
+    [Fact]
     public void Find_with_no_matches_does_not_move_the_selection()
     {
         using var viewModel = new MainViewModel();

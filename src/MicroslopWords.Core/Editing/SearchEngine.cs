@@ -98,9 +98,7 @@ public static class SearchEngine
     }
 
     internal static IEnumerable<ParagraphBlock> Paragraphs(Document document) =>
-        document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>();
+        document.EnumerateParagraphs();
 
     private static bool IsWholeWord(string text, int index, int length)
     {
