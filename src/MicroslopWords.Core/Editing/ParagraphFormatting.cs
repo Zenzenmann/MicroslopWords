@@ -367,8 +367,5 @@ internal static class ParagraphFormatting
     }
 
     public static ImmutableArray<ParagraphBlock> GetAllParagraphs(Document document) =>
-        document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .ToImmutableArray();
+        document.EnumerateParagraphs().ToImmutableArray();
 }

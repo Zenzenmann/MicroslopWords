@@ -15,4 +15,6 @@ public interface ITextEditorHost
     void SplitParagraph();
 
     void InsertSoftBreak();
+
+    bool TryMoveTableCell(bool forward);
 }

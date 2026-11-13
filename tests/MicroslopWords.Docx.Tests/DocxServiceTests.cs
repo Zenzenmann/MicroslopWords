@@ -284,7 +284,7 @@ public sealed class DocxServiceTests
     }
 
     [Fact]
-    public void Load_unsupported_table_reports_stable_diagnostic()
+    public void Load_table_imports_cells_without_unsupported_diagnostic()
     {
         var table = new DocumentFormat.OpenXml.Wordprocessing.Table(
             new DocumentFormat.OpenXml.Wordprocessing.TableRow(
@@ -295,10 +295,10 @@ public sealed class DocxServiceTests
 
         loaded.IsSuccess.ShouldBeTrue();
         loaded.Value.ShouldNotBeNull();
-        loaded.Value.PlainText.ShouldBeEmpty();
-        loaded.Diagnostics.ShouldContain(diagnostic =>
-            diagnostic.Code == DocxDiagnosticCodes.UnsupportedTable
-            && diagnostic.Severity == DiagnosticSeverity.Warning);
+        loaded.Value.PlainText.ShouldBe("cell");
+        loaded.Value.Sections.Single().Blocks.OfType<TableBlock>().ShouldHaveSingleItem();
+        loaded.Diagnostics.ShouldNotContain(diagnostic =>
+            diagnostic.Code == DocxDiagnosticCodes.UnsupportedTable);
     }
 
     [Fact]

@@ -346,6 +346,24 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     public partial string HangingIndentInput { get; set; } = "0";
 
     [ObservableProperty]
+    public partial string TableRowsInput { get; set; } = "3";
+
+    [ObservableProperty]
+    public partial string TableColumnsInput { get; set; } = "3";
+
+    [ObservableProperty]
+    public partial bool TableHasHeaderRow { get; set; } = true;
+
+    [ObservableProperty]
+    public partial string CellShadingInput { get; set; } = string.Empty;
+
+    [ObservableProperty]
+    public partial string TableColumnWidthInput { get; set; } = "90";
+
+    [ObservableProperty]
+    public partial string TableWidthInput { get; set; } = string.Empty;
+
+    [ObservableProperty]
     public partial bool IsStylesPanelOpen { get; set; }
 
     [ObservableProperty]
@@ -719,6 +737,192 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     {
         ExecuteEdit(new InsertPageBreakCommand(_history.Selection));
         RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void InsertTable()
+    {
+        if (!int.TryParse(
+                TableRowsInput,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var rows)
+            || !int.TryParse(
+                TableColumnsInput,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out var columns)
+            || rows is < 1 or > 20
+            || columns is < 1 or > 20)
+        {
+            ErrorMessage = "Table rows and columns must be between 1 and 20.";
+            return;
+        }
+
+        ExecuteTableEdit(new InsertTableCommand(
+            _history.Selection,
+            rows,
+            columns,
+            TableHasHeaderRow));
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void InsertRowAbove() =>
+        ExecuteTableEdit(new TableRowCommand(_history.Selection, insert: true, above: true));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void InsertRowBelow() =>
+        ExecuteTableEdit(new TableRowCommand(_history.Selection, insert: true, above: false));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void DeleteTableRow() =>
+        ExecuteTableEdit(new TableRowCommand(_history.Selection, insert: false, above: false));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void InsertColumnLeft() =>
+        ExecuteTableEdit(new TableColumnCommand(_history.Selection, insert: true, left: true));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void InsertColumnRight() =>
+        ExecuteTableEdit(new TableColumnCommand(_history.Selection, insert: true, left: false));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void DeleteTableColumn() =>
+        ExecuteTableEdit(new TableColumnCommand(_history.Selection, insert: false, left: false));
+
+    [RelayCommand]
+    private void SelectTable()
+    {
+        var command = new SelectTableCommand(_history.Selection);
+        _ = command.Apply(Document);
+        Selection = command.SelectionAfter;
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void DeleteTable() =>
+        ExecuteTableEdit(new DeleteTableCommand(_history.Selection));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void MergeTableCells() =>
+        ExecuteTableEdit(new MergeTableCellsCommand(_history.Selection));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void SplitTableCell() =>
+        ExecuteTableEdit(new SplitTableCellCommand(_history.Selection));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ToggleTableHeaderRow()
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        var table = Document.FindTableForParagraph(_history.Selection.Focus.ParagraphId);
+
+        if (table is null)
+        {
+            return;
+        }
+
+        ExecuteTableEdit(new SetTableHeaderRowCommand(
+            _history.Selection,
+            !table.HasHeaderRow));
+        TableHasHeaderRow = !table.HasHeaderRow;
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyCellShading()
+    {
+        var shading = string.IsNullOrWhiteSpace(CellShadingInput)
+            ? null
+            : TryNormalizeColor(CellShadingInput, out var color)
+                ? color
+                : null;
+
+        if (!string.IsNullOrWhiteSpace(CellShadingInput) && shading is null)
+        {
+            ErrorMessage = "Cell shading must use the #RRGGBB format.";
+            return;
+        }
+
+        ExecuteTableEdit(new SetTableCellShadingCommand(_history.Selection, shading));
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyCellBorders() =>
+        ExecuteTableEdit(new SetTableCellBordersCommand(
+            _history.Selection,
+            TableBorders.Default));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ClearCellBorders() =>
+        ExecuteTableEdit(new SetTableCellBordersCommand(
+            _history.Selection,
+            TableBorders.Default.WithoutSides()));
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyTableColumnWidth()
+    {
+        if (!TryParsePointValue(TableColumnWidthInput, out var width, allowNegative: false))
+        {
+            ErrorMessage = "Column width must be zero or greater.";
+            return;
+        }
+
+        ExecuteTableEdit(new SetTableColumnWidthCommand(_history.Selection, width));
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ApplyTableWidth()
+    {
+        double? width = null;
+
+        if (!string.IsNullOrWhiteSpace(TableWidthInput))
+        {
+            if (!TryParsePointValue(TableWidthInput, out var parsed, allowNegative: false))
+            {
+                ErrorMessage = "Table width must be zero or greater.";
+                return;
+            }
+
+            width = parsed;
+        }
+
+        ExecuteTableEdit(new SetTableWidthCommand(_history.Selection, width));
+    }
+
+    public bool TryMoveTableCell(bool forward)
+    {
+        if (!IsEditingEnabled
+            || Document.FindTableForParagraph(_history.Selection.Focus.ParagraphId) is null)
+        {
+            return false;
+        }
+
+        ExecuteTableEdit(new MoveTableCellCommand(_history.Selection, forward));
+        return true;
+    }
+
+    private void ExecuteTableEdit(DocumentEditCommand command)
+    {
+        if (!IsEditingEnabled)
+        {
+            return;
+        }
+
+        try
+        {
+            ExecuteEdit(command);
+            ErrorMessage = string.Empty;
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+
+        RefreshParagraphFormattingState();
+        RefreshStyleState();
     }
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
@@ -1121,10 +1325,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public bool CanPaste => IsEditingEnabled;
 
-    public bool CanSelectAll => Document.Sections
-        .SelectMany(section => section.Blocks)
-        .OfType<ParagraphBlock>()
-        .Any();
+    public bool CanSelectAll => Document.EnumerateParagraphs().Any();
 
     [RelayCommand(CanExecute = nameof(CanCopy))]
     private async Task CopyAsync()
@@ -1165,7 +1366,16 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
             return;
         }
 
-        ExecuteEdit(new DeleteSelectionCommand(selection));
+        if (content.Fragment is { Tables.Length: > 0 }
+            && Document.FindTableForParagraph(selection.Focus.ParagraphId) is not null)
+        {
+            ExecuteEdit(new DeleteTableCommand(selection));
+        }
+        else
+        {
+            ExecuteEdit(new DeleteSelectionCommand(selection));
+        }
+
         StatusText = "Cut.";
     }
 
@@ -1553,6 +1763,22 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         SaveStyleCommand.NotifyCanExecuteChanged();
         UpdateStyleFromSelectionCommand.NotifyCanExecuteChanged();
         DeleteStyleCommand.NotifyCanExecuteChanged();
+        InsertTableCommand.NotifyCanExecuteChanged();
+        InsertRowAboveCommand.NotifyCanExecuteChanged();
+        InsertRowBelowCommand.NotifyCanExecuteChanged();
+        DeleteTableRowCommand.NotifyCanExecuteChanged();
+        InsertColumnLeftCommand.NotifyCanExecuteChanged();
+        InsertColumnRightCommand.NotifyCanExecuteChanged();
+        DeleteTableColumnCommand.NotifyCanExecuteChanged();
+        DeleteTableCommand.NotifyCanExecuteChanged();
+        MergeTableCellsCommand.NotifyCanExecuteChanged();
+        SplitTableCellCommand.NotifyCanExecuteChanged();
+        ToggleTableHeaderRowCommand.NotifyCanExecuteChanged();
+        ApplyCellShadingCommand.NotifyCanExecuteChanged();
+        ApplyCellBordersCommand.NotifyCanExecuteChanged();
+        ClearCellBordersCommand.NotifyCanExecuteChanged();
+        ApplyTableColumnWidthCommand.NotifyCanExecuteChanged();
+        ApplyTableWidthCommand.NotifyCanExecuteChanged();
         FindCommand.NotifyCanExecuteChanged();
         NotifyClipboardCommands();
     }
@@ -2082,10 +2308,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         var selection = SelectionMap.Normalize(_history.Selection, Document);
         var start = selection.GetStart(Document);
         var end = selection.GetEnd(Document);
-        var paragraphs = Document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .ToList();
+        var paragraphs = Document.EnumerateParagraphs().ToList();
         var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
         var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
 
@@ -2437,10 +2660,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         }
 
         var selection = SelectionMap.Normalize(_history.Selection, Document);
-        var paragraphs = Document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .ToList();
+        var paragraphs = Document.EnumerateParagraphs().ToList();
 
         if (selection.IsCollapsed)
         {

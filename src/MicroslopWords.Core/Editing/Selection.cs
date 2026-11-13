@@ -42,16 +42,10 @@ public readonly record struct Selection(TextPosition Anchor, TextPosition Focus)
         TextNavigation.Compare(document, Anchor, Focus) <= 0 ? Focus : Anchor;
 
     internal static ParagraphBlock FirstParagraph(Document document) =>
-        document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .First();
+        document.EnumerateParagraphs().First();
 
     internal static ParagraphBlock LastParagraph(Document document) =>
-        document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .Last();
+        document.EnumerateParagraphs().Last();
 }
 
 public readonly record struct SelectionMap(Selection Before, Selection After)
@@ -450,7 +444,10 @@ public static class TextNavigation
         var paragraphs = AllParagraphs(document).ToImmutableArray();
         var index = FindParagraphOffset(paragraphs, paragraphId);
 
-        return index > 0 ? paragraphs[index - 1] : null;
+        return index > 0
+            && AreInSameCell(document, paragraphs[index - 1].Id, paragraphId)
+                ? paragraphs[index - 1]
+                : null;
     }
 
     public static ParagraphBlock? NextParagraph(Document document, Guid paragraphId)
@@ -458,9 +455,39 @@ public static class TextNavigation
         var paragraphs = AllParagraphs(document).ToImmutableArray();
         var index = FindParagraphOffset(paragraphs, paragraphId);
 
-        return index >= 0 && index + 1 < paragraphs.Length
-            ? paragraphs[index + 1]
-            : null;
+        return index >= 0
+            && index + 1 < paragraphs.Length
+            && AreInSameCell(document, paragraphId, paragraphs[index + 1].Id)
+                ? paragraphs[index + 1]
+                : null;
+    }
+
+    public static bool AreInSameCell(
+        Document document,
+        Guid firstParagraphId,
+        Guid secondParagraphId)
+    {
+        var firstTable = document.FindTableForParagraph(firstParagraphId);
+        var secondTable = document.FindTableForParagraph(secondParagraphId);
+
+        if (firstTable is null && secondTable is null)
+        {
+            return true;
+        }
+
+        if (firstTable is null
+            || secondTable is null
+            || firstTable.Id != secondTable.Id)
+        {
+            return false;
+        }
+
+        var firstCell = firstTable.FindCellForParagraph(firstParagraphId);
+        var secondCell = secondTable.FindCellForParagraph(secondParagraphId);
+
+        return firstCell is not null
+            && secondCell is not null
+            && firstCell.Value.Cell.Id == secondCell.Value.Cell.Id;
     }
 
     private static int FindParagraphOffset(
@@ -479,9 +506,7 @@ public static class TextNavigation
     }
 
     public static IEnumerable<ParagraphBlock> AllParagraphs(Document document) =>
-        document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>();
+        document.EnumerateParagraphs();
 
     public static int FindRunIndex(ParagraphBlock paragraph, Guid runId)
     {

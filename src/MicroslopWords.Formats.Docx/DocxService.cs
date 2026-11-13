@@ -11,12 +11,21 @@ using CoreDocument = MicroslopWords.Core.Documents.Document;
 using CoreParagraphProperties = MicroslopWords.Core.Documents.ParagraphProperties;
 using CoreRun = MicroslopWords.Core.Documents.Run;
 using CoreRunProperties = MicroslopWords.Core.Documents.RunProperties;
+using CoreTableBlock = MicroslopWords.Core.Documents.TableBlock;
+using CoreTableBorders = MicroslopWords.Core.Documents.TableBorders;
+using CoreTableCell = MicroslopWords.Core.Documents.TableCell;
+using CoreTableRow = MicroslopWords.Core.Documents.TableRow;
 using WpDocument = DocumentFormat.OpenXml.Wordprocessing.Document;
 using WpParagraph = DocumentFormat.OpenXml.Wordprocessing.Paragraph;
 using WpParagraphProperties = DocumentFormat.OpenXml.Wordprocessing.ParagraphProperties;
 using WpRun = DocumentFormat.OpenXml.Wordprocessing.Run;
 using WpRunProperties = DocumentFormat.OpenXml.Wordprocessing.RunProperties;
 using WpStyle = DocumentFormat.OpenXml.Wordprocessing.Style;
+using WpTable = DocumentFormat.OpenXml.Wordprocessing.Table;
+using WpTableBorders = DocumentFormat.OpenXml.Wordprocessing.TableBorders;
+using WpTableCell = DocumentFormat.OpenXml.Wordprocessing.TableCell;
+using WpTableCellBorders = DocumentFormat.OpenXml.Wordprocessing.TableCellBorders;
+using WpTableRow = DocumentFormat.OpenXml.Wordprocessing.TableRow;
 using WpText = DocumentFormat.OpenXml.Wordprocessing.Text;
 
 namespace MicroslopWords.Formats.Docx;
@@ -79,10 +88,8 @@ public static class DocxService
                     case WpParagraph paragraph:
                         blocks.Add(ToParagraphBlock(paragraph, Report, numbering, listIds));
                         break;
-                    case Table:
-                        Report(
-                            DocxDiagnosticCodes.UnsupportedTable,
-                            "Tables are not shown in this preview.");
+                    case WpTable table:
+                        blocks.Add(ToTableBlock(table, Report, numbering, listIds));
                         break;
                     case SectionProperties properties:
                         sectionProperties = properties;
@@ -141,39 +148,19 @@ public static class DocxService
 
         var numberingIds = PrepareNumbering(mainPart, document);
 
-        foreach (var paragraphBlock in document.Sections
-                     .SelectMany(section => section.Blocks)
-                     .OfType<ParagraphBlock>())
+        foreach (var block in document.Sections.SelectMany(section => section.Blocks))
         {
-            var paragraph = new WpParagraph();
-            var wordParagraphProperties = ToWordParagraphProperties(
-                paragraphBlock.EffectiveProperties,
-                paragraphBlock.Id,
-                numberingIds);
-
-            if (wordParagraphProperties is not null)
+            if (block is ParagraphBlock paragraphBlock)
             {
-                paragraph.Append(wordParagraphProperties);
+                AppendParagraph(body, paragraphBlock, numberingIds);
             }
-
-            foreach (var run in paragraphBlock.Runs)
+            else if (block is CoreTableBlock tableBlock)
             {
-                var wpRun = new WpRun();
-                var wordProperties = ToWordRunProperties(run.Properties);
-
-                if (wordProperties is not null)
-                {
-                    wpRun.Append(wordProperties);
-                }
-
-                AppendRunText(wpRun, run.Text);
-                paragraph.Append(wpRun);
+                body.Append(ToWordTable(tableBlock, numberingIds));
             }
-
-            body.Append(paragraph);
         }
 
-        if (!body.Elements<WpParagraph>().Any())
+        if (!body.Elements<WpParagraph>().Any() && !body.Elements<WpTable>().Any())
         {
             body.Append(new WpParagraph());
         }
@@ -184,6 +171,165 @@ public static class DocxService
         mainPart.Document.Save();
     }
 
+    private static void AppendParagraph(
+        OpenXmlElement parent,
+        ParagraphBlock paragraphBlock,
+        Dictionary<Guid, int> numberingIds)
+    {
+        var paragraph = new WpParagraph();
+        var wordParagraphProperties = ToWordParagraphProperties(
+            paragraphBlock.EffectiveProperties,
+            paragraphBlock.Id,
+            numberingIds);
+
+        if (wordParagraphProperties is not null)
+        {
+            paragraph.Append(wordParagraphProperties);
+        }
+
+        foreach (var run in paragraphBlock.Runs)
+        {
+            var wpRun = new WpRun();
+            var wordProperties = ToWordRunProperties(run.Properties);
+
+            if (wordProperties is not null)
+            {
+                wpRun.Append(wordProperties);
+            }
+
+            AppendRunText(wpRun, run.Text);
+            paragraph.Append(wpRun);
+        }
+
+        parent.Append(paragraph);
+    }
+
+    private static WpTable ToWordTable(
+        CoreTableBlock table,
+        Dictionary<Guid, int> numberingIds)
+    {
+        var borders = table.Borders ?? CoreTableBorders.Default;
+        var width = table.WidthPoints ?? table.ColumnWidths.Sum();
+        var wordTable = new WpTable(
+            new TableProperties(
+                new TableWidth
+                {
+                    Width = ToTwips(width),
+                    Type = TableWidthUnitValues.Dxa,
+                },
+                ToWordTableBorders(borders),
+                new TableLayout { Type = TableLayoutValues.Fixed }));
+
+        var grid = new TableGrid();
+
+        foreach (var columnWidth in table.ColumnWidths)
+        {
+            grid.Append(new GridColumn { Width = ToTwips(columnWidth) });
+        }
+
+        wordTable.Append(grid);
+
+        foreach (var row in table.Rows)
+        {
+            var wordRow = new WpTableRow();
+
+            if (row.IsHeader)
+            {
+                wordRow.Append(new TableRowProperties(new TableHeader()));
+            }
+
+            var gridColumn = 0;
+
+            foreach (var cell in row.Cells)
+            {
+                var span = Math.Max(1, cell.ColumnSpan);
+                var cellWidth = table.ColumnWidths
+                    .Skip(gridColumn)
+                    .Take(span)
+                    .Sum();
+                var cellProperties = new TableCellProperties(
+                    new TableCellWidth
+                    {
+                        Width = ToTwips(cellWidth),
+                        Type = TableWidthUnitValues.Dxa,
+                    });
+
+                if (span > 1)
+                {
+                    cellProperties.Append(new GridSpan { Val = span });
+                }
+
+                if (cell.IsMergedContinuation)
+                {
+                    cellProperties.Append(new VerticalMerge
+                    {
+                        Val = MergedCellValues.Continue,
+                    });
+                }
+                else if (cell.RowSpan > 1)
+                {
+                    cellProperties.Append(new VerticalMerge
+                    {
+                        Val = MergedCellValues.Restart,
+                    });
+                }
+
+                if (cell.Borders is not null)
+                {
+                    cellProperties.Append(ToWordCellBorders(cell.Borders));
+                }
+
+                if (cell.ShadingHex is not null)
+                {
+                    cellProperties.Append(new Shading
+                    {
+                        Val = ShadingPatternValues.Clear,
+                        Fill = cell.ShadingHex.TrimStart('#'),
+                    });
+                }
+
+                var wordCell = new WpTableCell(cellProperties);
+
+                foreach (var paragraph in cell.Paragraphs)
+                {
+                    AppendParagraph(wordCell, paragraph, numberingIds);
+                }
+
+                wordRow.Append(wordCell);
+                gridColumn += span;
+            }
+
+            wordTable.Append(wordRow);
+        }
+
+        return wordTable;
+    }
+
+    private static WpTableBorders ToWordTableBorders(CoreTableBorders borders) =>
+        new(
+            ToWordBorder<TopBorder>(borders, borders.Top),
+            ToWordBorder<LeftBorder>(borders, borders.Left),
+            ToWordBorder<BottomBorder>(borders, borders.Bottom),
+            ToWordBorder<RightBorder>(borders, borders.Right));
+
+    private static WpTableCellBorders ToWordCellBorders(CoreTableBorders borders) =>
+        new(
+            ToWordBorder<TopBorder>(borders, borders.Top),
+            ToWordBorder<LeftBorder>(borders, borders.Left),
+            ToWordBorder<BottomBorder>(borders, borders.Bottom),
+            ToWordBorder<RightBorder>(borders, borders.Right));
+
+    private static TBorder ToWordBorder<TBorder>(
+        CoreTableBorders borders,
+        bool visible)
+        where TBorder : BorderType, new() =>
+        new()
+        {
+            Val = visible ? BorderValues.Single : BorderValues.Nil,
+            Color = borders.ColorHex.TrimStart('#'),
+            Size = (uint)Math.Round(borders.WidthPoints * 8),
+        };
+
     private static Dictionary<Guid, int> PrepareNumbering(
         MainDocumentPart mainPart,
         CoreDocument document)
@@ -192,9 +338,7 @@ public static class DocxService
         var levelKinds = new Dictionary<Guid, ListKind?[]>();
         var nextId = 1;
 
-        foreach (var paragraph in document.Sections
-                     .SelectMany(section => section.Blocks)
-                     .OfType<ParagraphBlock>())
+        foreach (var paragraph in document.EnumerateParagraphs())
         {
             var properties = StyleResolver.ResolveParagraph(paragraph, document.EffectiveStyles);
 
@@ -341,20 +485,30 @@ public static class DocxService
         bool Writes(ParagraphPropertyOverrides flag) =>
             !hasStyle || properties.Overrides.HasFlag(flag);
 
-        if (Writes(ParagraphPropertyOverrides.Alignment)
-            && properties.Alignment != ParagraphAlignment.Left)
+        if (!string.IsNullOrWhiteSpace(properties.StyleId))
         {
-            wordProperties.Append(new Justification
+            wordProperties.Append(new ParagraphStyleId
             {
-                Val = properties.Alignment switch
-                {
-                    ParagraphAlignment.Center => JustificationValues.Center,
-                    ParagraphAlignment.Right => JustificationValues.Right,
-                    ParagraphAlignment.Justify => JustificationValues.Both,
-                    _ => JustificationValues.Left,
-                },
+                Val = properties.StyleId,
             });
             hasContent = true;
+        }
+
+        if (properties.ListKind != ListKind.None
+            && Writes(ParagraphPropertyOverrides.List))
+        {
+            var key = properties.ListId ?? paragraphId;
+
+            if (numberingIds.TryGetValue(key, out var numberId))
+            {
+                wordProperties.Append(new NumberingProperties(
+                    new NumberingLevelReference
+                    {
+                        Val = Math.Clamp(properties.ListLevel, 1, 9) - 1,
+                    },
+                    new NumberingId { Val = numberId }));
+                hasContent = true;
+            }
         }
 
         var writeBefore = Writes(ParagraphPropertyOverrides.SpaceBefore);
@@ -430,29 +584,18 @@ public static class DocxService
             hasContent = true;
         }
 
-        if (properties.ListKind != ListKind.None
-            && Writes(ParagraphPropertyOverrides.List))
+        if (Writes(ParagraphPropertyOverrides.Alignment)
+            && properties.Alignment != ParagraphAlignment.Left)
         {
-            var key = properties.ListId ?? paragraphId;
-
-            if (numberingIds.TryGetValue(key, out var numberId))
+            wordProperties.Append(new Justification
             {
-                var numbering = new NumberingProperties(
-                    new NumberingLevelReference
-                    {
-                        Val = Math.Clamp(properties.ListLevel, 1, 9) - 1,
-                    },
-                    new NumberingId { Val = numberId });
-                wordProperties.Append(numbering);
-                hasContent = true;
-            }
-        }
-
-        if (!string.IsNullOrWhiteSpace(properties.StyleId))
-        {
-            wordProperties.Append(new ParagraphStyleId
-            {
-                Val = properties.StyleId,
+                Val = properties.Alignment switch
+                {
+                    ParagraphAlignment.Center => JustificationValues.Center,
+                    ParagraphAlignment.Right => JustificationValues.Right,
+                    ParagraphAlignment.Justify => JustificationValues.Both,
+                    _ => JustificationValues.Left,
+                },
             });
             hasContent = true;
         }
@@ -614,21 +757,17 @@ public static class DocxService
         bool Writes(RunPropertyOverrides flag) =>
             !hasStyle || properties.Overrides.HasFlag(flag);
 
+        if (hasStyle)
+        {
+            runProperties.Append(new RunStyle { Val = properties.StyleId });
+        }
+
         if (Writes(RunPropertyOverrides.FontFamily))
         {
             runProperties.Append(new RunFonts
             {
                 Ascii = properties.FontFamily,
                 HighAnsi = properties.FontFamily,
-            });
-        }
-
-        if (Writes(RunPropertyOverrides.FontSize))
-        {
-            runProperties.Append(new FontSize
-            {
-                Val = ((int)Math.Round(properties.FontSizePoints * 2))
-                    .ToString(CultureInfo.InvariantCulture),
             });
         }
 
@@ -650,18 +789,6 @@ public static class DocxService
             runProperties.Append(new Italic());
         }
 
-        if (hasStyle && Writes(RunPropertyOverrides.Underline))
-        {
-            runProperties.Append(new Underline
-            {
-                Val = properties.Underline ? UnderlineValues.Single : UnderlineValues.None,
-            });
-        }
-        else if (properties.Underline)
-        {
-            runProperties.Append(new Underline { Val = UnderlineValues.Single });
-        }
-
         if (hasStyle && Writes(RunPropertyOverrides.Strikethrough))
         {
             runProperties.Append(new Strike { Val = properties.Strikethrough });
@@ -681,6 +808,27 @@ public static class DocxService
             runProperties.Append(new Color { Val = color ?? "000000" });
         }
 
+        if (Writes(RunPropertyOverrides.FontSize))
+        {
+            runProperties.Append(new FontSize
+            {
+                Val = ((int)Math.Round(properties.FontSizePoints * 2))
+                    .ToString(CultureInfo.InvariantCulture),
+            });
+        }
+
+        if (hasStyle && Writes(RunPropertyOverrides.Underline))
+        {
+            runProperties.Append(new Underline
+            {
+                Val = properties.Underline ? UnderlineValues.Single : UnderlineValues.None,
+            });
+        }
+        else if (properties.Underline)
+        {
+            runProperties.Append(new Underline { Val = UnderlineValues.Single });
+        }
+
         var highlight = NormalizeHex(properties.HighlightHex);
         var writeHighlight = hasStyle
             ? Writes(RunPropertyOverrides.Highlight)
@@ -689,11 +837,6 @@ public static class DocxService
         if (writeHighlight)
         {
             runProperties.Append(new Shading { Fill = highlight ?? "auto" });
-        }
-
-        if (hasStyle)
-        {
-            runProperties.Append(new RunStyle { Val = properties.StyleId });
         }
 
         return runProperties.ChildElements.Count > 0 ? runProperties : null;
@@ -926,21 +1069,6 @@ public static class DocxService
         var element = new StyleParagraphProperties();
         var hasContent = false;
 
-        if (properties.Alignment != ParagraphAlignment.Left)
-        {
-            element.Append(new Justification
-            {
-                Val = properties.Alignment switch
-                {
-                    ParagraphAlignment.Center => JustificationValues.Center,
-                    ParagraphAlignment.Right => JustificationValues.Right,
-                    ParagraphAlignment.Justify => JustificationValues.Both,
-                    _ => JustificationValues.Left,
-                },
-            });
-            hasContent = true;
-        }
-
         if (properties.SpaceBeforePoints != 0
             || properties.SpaceAfterPoints != 8
             || Math.Abs(properties.LineSpacing - 1.15) > 0.0001)
@@ -979,6 +1107,21 @@ public static class DocxService
             hasContent = true;
         }
 
+        if (properties.Alignment != ParagraphAlignment.Left)
+        {
+            element.Append(new Justification
+            {
+                Val = properties.Alignment switch
+                {
+                    ParagraphAlignment.Center => JustificationValues.Center,
+                    ParagraphAlignment.Right => JustificationValues.Right,
+                    ParagraphAlignment.Justify => JustificationValues.Both,
+                    _ => JustificationValues.Left,
+                },
+            });
+            hasContent = true;
+        }
+
         return hasContent ? element : null;
     }
 
@@ -989,11 +1132,6 @@ public static class DocxService
             {
                 Ascii = properties.FontFamily,
                 HighAnsi = properties.FontFamily,
-            },
-            new FontSize
-            {
-                Val = ((int)Math.Round(properties.FontSizePoints * 2))
-                    .ToString(CultureInfo.InvariantCulture),
             });
 
         if (properties.Bold)
@@ -1006,11 +1144,6 @@ public static class DocxService
             element.Append(new Italic());
         }
 
-        if (properties.Underline)
-        {
-            element.Append(new Underline { Val = UnderlineValues.Single });
-        }
-
         if (properties.Strikethrough)
         {
             element.Append(new Strike());
@@ -1021,6 +1154,17 @@ public static class DocxService
         if (color is not null)
         {
             element.Append(new Color { Val = color });
+        }
+
+        element.Append(new FontSize
+        {
+            Val = ((int)Math.Round(properties.FontSizePoints * 2))
+                .ToString(CultureInfo.InvariantCulture),
+        });
+
+        if (properties.Underline)
+        {
+            element.Append(new Underline { Val = UnderlineValues.Single });
         }
 
         var highlight = NormalizeHex(properties.HighlightHex);
@@ -1051,6 +1195,269 @@ public static class DocxService
             styles[index] = style;
         }
     }
+
+    private sealed record ParsedTableCell(
+        CoreTableCell Cell,
+        bool IsRestart,
+        bool IsContinuation);
+
+    private sealed record ParsedGridCell(
+        int StartColumn,
+        int Span,
+        ParsedTableCell Cell);
+
+    private static CoreTableBlock ToTableBlock(
+        WpTable table,
+        Action<string, string> report,
+        Numbering? numbering,
+        Dictionary<long, Guid> listIds)
+    {
+        if (table.Descendants<WpTable>().Any())
+        {
+            report(
+                DocxDiagnosticCodes.UnsupportedTable,
+                "Nested tables are not supported.");
+        }
+
+        var properties = table.GetFirstChild<TableProperties>();
+        var grid = table.GetFirstChild<TableGrid>();
+        var gridColumns = grid?.Elements<GridColumn>().ToList() ?? [];
+        var rowElements = table.Elements<WpTableRow>().ToList();
+        var columnCount = gridColumns.Count;
+
+        if (columnCount == 0)
+        {
+            columnCount = rowElements.Count == 0
+                ? 1
+                : Math.Max(
+                    1,
+                    rowElements.Max(row => row.Elements<WpTableCell>()
+                        .Sum(cell => Math.Max(
+                            1,
+                            (int)(cell.GetFirstChild<TableCellProperties>()
+                                ?.GridSpan?.Val?.Value ?? 1)))));
+        }
+
+        var widths = new double[columnCount];
+
+        for (var index = 0; index < columnCount && index < gridColumns.Count; index++)
+        {
+            widths[index] = ParseTwips(gridColumns[index].Width?.Value) ?? 0;
+        }
+
+        if (widths.Sum() <= 0)
+        {
+            Array.Fill(widths, 468d / columnCount);
+        }
+        else if (widths.Any(width => width <= 0))
+        {
+            var average = widths.Where(width => width > 0).Average();
+
+            for (var index = 0; index < widths.Length; index++)
+            {
+                if (widths[index] <= 0)
+                {
+                    widths[index] = average;
+                }
+            }
+        }
+
+        var borders = ToCoreTableBorders(properties?.TableBorders) ?? CoreTableBorders.Default;
+        var parsedRows = new List<(bool IsHeader, List<ParsedTableCell> Cells)>();
+
+        foreach (var rowElement in rowElements)
+        {
+            var isHeader = rowElement.GetFirstChild<TableRowProperties>()
+                ?.GetFirstChild<TableHeader>() is not null;
+            var parsedCells = new List<ParsedTableCell>();
+
+            foreach (var cellElement in rowElement.Elements<WpTableCell>())
+            {
+                var cellProperties = cellElement.GetFirstChild<TableCellProperties>();
+                var span = Math.Max(
+                    1,
+                    (int)(cellProperties?.GridSpan?.Val?.Value ?? 1));
+                var verticalMerge = cellProperties?.VerticalMerge?.Val?.Value;
+                var shading = NormalizeHex(cellProperties?.Shading?.Fill?.Value) is { } fill
+                    ? "#" + fill
+                    : null;
+                var cellBorders = ToCoreTableBorders(cellProperties?.TableCellBorders)
+                    ?? borders;
+                var paragraphs = cellElement
+                    .Elements<WpParagraph>()
+                    .Select(paragraph => ToParagraphBlock(
+                        paragraph,
+                        report,
+                        numbering,
+                        listIds))
+                    .ToImmutableArray();
+
+                if (paragraphs.Length == 0)
+                {
+                    paragraphs = ImmutableArray.Create(ParagraphBlock.Create());
+                }
+
+                if (cellElement.Descendants<WpTable>().Any())
+                {
+                    report(
+                        DocxDiagnosticCodes.UnsupportedTable,
+                        "Nested tables are not supported.");
+                }
+
+                var cell = new CoreTableCell(
+                    Guid.NewGuid(),
+                    paragraphs,
+                    ColumnSpan: span,
+                    ShadingHex: shading,
+                    Borders: cellBorders,
+                    IsMergedContinuation: verticalMerge == MergedCellValues.Continue);
+                parsedCells.Add(new ParsedTableCell(
+                    cell,
+                    verticalMerge == MergedCellValues.Restart,
+                    verticalMerge == MergedCellValues.Continue));
+            }
+
+            parsedRows.Add((isHeader, parsedCells));
+        }
+
+        var origins = new List<List<ParsedGridCell>>();
+        var maximumColumn = 0;
+
+        foreach (var (_, rowCells) in parsedRows)
+        {
+            var rowOrigins = new List<ParsedGridCell>();
+            var gridColumn = 0;
+
+            foreach (var parsedCell in rowCells)
+            {
+                rowOrigins.Add(new ParsedGridCell(
+                    gridColumn,
+                    parsedCell.Cell.ColumnSpan,
+                    parsedCell));
+                gridColumn += Math.Max(1, parsedCell.Cell.ColumnSpan);
+            }
+
+            origins.Add(rowOrigins);
+            maximumColumn = Math.Max(maximumColumn, gridColumn);
+        }
+
+        if (maximumColumn > columnCount)
+        {
+            var extended = new double[maximumColumn];
+            Array.Copy(widths, extended, widths.Length);
+            var average = widths.Length == 0 ? 90 : widths.Average();
+
+            for (var index = widths.Length; index < extended.Length; index++)
+            {
+                extended[index] = average;
+            }
+
+            widths = extended;
+            columnCount = maximumColumn;
+        }
+
+        var tableRows = parsedRows
+            .Select((row, _) => new CoreTableRow(
+                Guid.NewGuid(),
+                row.Cells.Select(cell => cell.Cell).ToImmutableArray(),
+                row.IsHeader))
+            .ToList();
+
+        for (var rowIndex = 0; rowIndex < parsedRows.Count; rowIndex++)
+        {
+            for (var cellIndex = 0; cellIndex < parsedRows[rowIndex].Cells.Count; cellIndex++)
+            {
+                var parsed = parsedRows[rowIndex].Cells[cellIndex];
+
+                if (!parsed.IsRestart)
+                {
+                    continue;
+                }
+
+                var origin = origins[rowIndex]
+                    .FirstOrDefault(item => item.Cell.Cell.Id == parsed.Cell.Id);
+
+                if (origin is null)
+                {
+                    continue;
+                }
+
+                var rowSpan = 1;
+
+                for (var nextRow = rowIndex + 1; nextRow < origins.Count; nextRow++)
+                {
+                    var covering = origins[nextRow].FirstOrDefault(item =>
+                        item.StartColumn <= origin.StartColumn
+                        && origin.StartColumn < item.StartColumn + item.Span);
+
+                    if (covering is null || !covering.Cell.IsContinuation)
+                    {
+                        break;
+                    }
+
+                    rowSpan++;
+                }
+
+                if (rowSpan > 1)
+                {
+                    tableRows[rowIndex] = tableRows[rowIndex] with
+                    {
+                        Cells = tableRows[rowIndex].Cells.SetItem(
+                            cellIndex,
+                            parsed.Cell with { RowSpan = rowSpan }),
+                    };
+                }
+            }
+        }
+
+        var tableWidth = ParseTwips(properties?.TableWidth?.Width?.Value)
+            ?? widths.Sum();
+
+        return new CoreTableBlock(
+            Guid.NewGuid(),
+            tableRows.ToImmutableArray(),
+            widths.ToImmutableArray(),
+            parsedRows.Any(row => row.IsHeader),
+            tableWidth,
+            borders);
+    }
+
+    private static CoreTableBorders? ToCoreTableBorders(OpenXmlElement? borders)
+    {
+        if (borders is null)
+        {
+            return null;
+        }
+
+        var top = borders.GetFirstChild<TopBorder>();
+        var bottom = borders.GetFirstChild<BottomBorder>();
+        var left = borders.GetFirstChild<LeftBorder>();
+        var right = borders.GetFirstChild<RightBorder>();
+
+        if (top is null && bottom is null && left is null && right is null)
+        {
+            return null;
+        }
+
+        var color = NormalizeHex(
+            top?.Color?.Value
+            ?? left?.Color?.Value
+            ?? bottom?.Color?.Value
+            ?? right?.Color?.Value)
+            ?? "#000000";
+        var size = ParseEighthPoints(top?.Size?.Value) ?? 0.5;
+
+        return new CoreTableBorders(
+            left is not null && left.Val?.Value != BorderValues.Nil,
+            top is not null && top.Val?.Value != BorderValues.Nil,
+            right is not null && right.Val?.Value != BorderValues.Nil,
+            bottom is not null && bottom.Val?.Value != BorderValues.Nil,
+            color,
+            size);
+    }
+
+    private static double? ParseEighthPoints(uint? value) =>
+        value is null ? null : value.Value / 8.0;
 
     private static ParagraphBlock ToParagraphBlock(
         WpParagraph paragraph,
