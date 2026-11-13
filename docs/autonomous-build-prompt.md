@@ -18,7 +18,7 @@ You are the autonomous build agent for the **MicroslopWords** repository. Work i
 
 This repository may have several sessions running at once. Never share a working tree between sessions. Each session works in its own git worktree and checks out one story branch at a time.
 
-- At session start, run `git worktree list`. If it shows more than one worktree, or the primary is not on `main`, treat the repo as multi-session: do not code in the primary; create or enter a dedicated worktree first.
+- At session start, run `git worktree list`. The worktree on `main` is integration-only. If you are in it, do not code there; create or enter a story worktree first. If another worktree exists, treat the repo as multi-session.
 - Create one worktree per session from current `main` (the example uses the first story):
 
 ```powershell
@@ -32,7 +32,7 @@ git worktree add ..\microslopwords-worktrees\STORY-NNN -b story/STORY-NNN origin
 - Work only inside your worktree. Never switch another worktree's branch, edit its files, or run builds in it.
 - Separate worktrees give separate `bin/` and `obj/`, so parallel build/test is safe. A shared worktree is not: expect index locks, branch races, and mixed changes.
 - If you see unexpected tracked changes, `.git/index.lock`, or files changing under you, stop and report. Do not "clean up" another session's work.
-- In steady state, the primary worktree owns `main`. Worker worktrees never check out `main` when more than one worktree exists.
+- The integration worktree owns `main`. Worker worktrees never check out `main` when more than one worktree exists.
 - After a merge, reuse the same worktree for the next story (`git fetch origin; git switch -c story/NEXT origin/main`) or create a new worktree. Delete only branches you created and that are already merged.
 - `scripts/auto-build.ps1` now opens and merges a PR, but it still switches to `main` after the merge. Run it only in a single-session checkout, never in a worker worktree while another worktree owns `main`. In multi-session mode, use the manual PR flow in section 7.
 
@@ -52,14 +52,14 @@ Read, in this order:
 
 Do **not** trust `_bmad-output/implementation-artifacts/sprint-status.yaml`; it is stale. Determine completion from `main`'s history plus actual code and tests.
 
-Some context files (for example `epic-3-context.md` or a story-specific spec) may be untracked and exist only in the primary worktree. If your story needs one, copy it into your worktree; do not commit it with the story.
+Some context files (for example `epic-3-context.md` or a story-specific spec) may be untracked and exist only in the worktree that created them. If your story needs one, copy it into your worktree; do not commit it with the story.
 
 ## 2. Choose exactly one story
 
 Run only the block for the worktree you are in:
 
 ```powershell
-# Primary/integration worktree:
+# Integration worktree:
 git switch main
 git pull --ff-only origin main
 
@@ -159,15 +159,15 @@ If the story has an unresolved `spec_checkpoint` or `done_checkpoint`, or needs 
 - Do not merge a PR while CI is failing or still running.
 - If `gh pr merge` fails because the branch is behind `main`, rebase, rerun the gates, push, wait for checks, and retry. Stop after 3 attempts.
 - If conflicts are non-trivial or outside your story, stop and report instead of guessing.
-- After the merge, switch to `main` in the primary worktree and pull; in a worker worktree, `git fetch origin` and start the next story from `origin/main`.
-- The designated integrator (or the primary worktree) runs post-merge build/test/format. If a post-merge gate fails, open a revert PR and stop.
+- After the merge, switch to `main` in the integration worktree and pull; in a worker worktree, `git fetch origin` and start the next story from `origin/main`.
+- The designated integrator (or the integration worktree) runs post-merge build/test/format. If a post-merge gate fails, open a revert PR and stop.
 - Never use `gh pr merge --admin`; it bypasses the protection this workflow depends on.
 
 Never force-push, never rewrite `main`, and never merge with failing gates, unresolved conflicts, protected-file changes, or possible secrets.
 
 ## 8. Continue or stop
 
-After a successful merge, sync `origin/main` (or pull `main` in the primary worktree) and repeat from step 2. Reuse your worktree with a new branch, or create a new worktree. Stop immediately and report if:
+After a successful merge, sync `origin/main` (or pull `main` in the integration worktree) and repeat from step 2. Reuse your worktree with a new branch, or create a new worktree. Stop immediately and report if:
 
 - tracked working-tree changes exist that you did not make;
 - the spec or acceptance criteria are ambiguous, contradictory, or missing;
@@ -211,14 +211,14 @@ Begin now: ground yourself, identify the next eligible story, state the plan in 
 
 ## One-liner for new sessions
 
-Start the session inside the story's worktree, then paste the absolute-path form (this file may not exist in a fresh worktree until it is committed to `main`):
-
-```text
-Read C:\Users\Anime\Desktop\microslopwords\docs\autonomous-build-prompt.md and execute it as your operating contract for this session; work autonomously until a stop condition or the story budget is reached, then report.
-```
-
-After this file is committed to `main`, the shorter relative form works from any worktree:
+Start the session inside a story worktree based on current `main`, then paste:
 
 ```text
 Read docs/autonomous-build-prompt.md and execute it as your operating contract for this session; work autonomously until a stop condition or the story budget is reached, then report.
+```
+
+If your worktree predates this file, restore it with:
+
+```powershell
+git show origin/main:docs/autonomous-build-prompt.md | Set-Content docs/autonomous-build-prompt.md
 ```
