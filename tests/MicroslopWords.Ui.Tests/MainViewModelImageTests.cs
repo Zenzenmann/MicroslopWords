@@ -243,4 +243,3 @@ public sealed class MainViewModelImageTests
         }
     }
 }
-

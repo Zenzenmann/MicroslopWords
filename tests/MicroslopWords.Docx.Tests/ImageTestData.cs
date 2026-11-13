@@ -12,4 +12,3 @@ internal static class ImageTestData
 
     public static byte[] Gif() => Convert.FromBase64String(GifBase64);
 }
-
