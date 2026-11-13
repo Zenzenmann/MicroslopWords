@@ -1,6 +1,8 @@
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Input;
 using Avalonia.Threading;
+using MicroslopWords.App.Controls;
 using MicroslopWords.App.ViewModels;
 
 namespace MicroslopWords.App.Views;
@@ -37,9 +39,16 @@ public partial class FindPanel : UserControl
     {
         base.OnPropertyChanged(change);
 
-        if (change.Property == IsVisibleProperty && IsVisible)
+        if (change.Property == IsVisibleProperty)
         {
-            ScheduleSearchFocus();
+            if (IsVisible)
+            {
+                ScheduleSearchFocus();
+            }
+            else
+            {
+                ScheduleCanvasFocus();
+            }
         }
     }
 
@@ -117,6 +126,18 @@ public partial class FindPanel : UserControl
 
                 SearchBox.Focus();
                 SearchBox.SelectAll();
+            },
+            DispatcherPriority.Input);
+
+    private void ScheduleCanvasFocus() =>
+        Dispatcher.UIThread.Post(
+            () =>
+            {
+                if (TopLevel.GetTopLevel(this) is MainWindow window)
+                {
+                    window.FindControl<DocumentPreviewControl>("PageCanvas")
+                        ?.Focus();
+                }
             },
             DispatcherPriority.Input);
 }

@@ -2,9 +2,11 @@ using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Threading;
 using Avalonia.VisualTree;
+using MicroslopWords.App.Controls;
 using MicroslopWords.App.Services;
 using MicroslopWords.App.ViewModels;
 using MicroslopWords.App.Views;
+using MicroslopWords.Core.Documents;
 using MicroslopWords.Core.Editing;
 using Shouldly;
 
@@ -66,6 +68,40 @@ public sealed class FindUiTests
         viewModel.FindStatusText.ShouldBe("Match 2 of 2. Wrapped to the end.");
     }
 
+    [AvaloniaFact]
+    public void Find_prefills_the_selection_and_returns_focus_to_the_canvas_on_close()
+    {
+        using var viewModel = new MainViewModel();
+        viewModel.InsertText("Hello world");
+        var paragraph = viewModel.Document.Sections
+            .SelectMany(section => section.Blocks)
+            .OfType<ParagraphBlock>()
+            .Single();
+        var run = paragraph.Runs[0];
+        viewModel.Selection = new Selection(
+            new TextPosition(paragraph.Id, run.Id, 0),
+            new TextPosition(paragraph.Id, run.Id, 5));
+
+        var window = new MainWindow { DataContext = viewModel };
+        window.Show();
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.FindCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.FindQuery.ShouldBe("Hello");
+
+        viewModel.CloseFindCommand.Execute(null);
+        Dispatcher.UIThread.RunJobs();
+
+        viewModel.IsFindPanelOpen.ShouldBeFalse();
+        var canvas = window.FindControl<DocumentPreviewControl>("PageCanvas");
+        canvas.ShouldNotBeNull();
+        canvas.IsFocused.ShouldBeTrue();
+
+        window.Close();
+    }
+
     [Fact]
     public void Find_with_no_matches_does_not_move_the_selection()
     {
@@ -95,6 +131,24 @@ public sealed class FindUiTests
 
         viewModel.Document.PlainText.ShouldBe("Hello there");
         viewModel.FindMatchCount.ShouldBe(0);
+        viewModel.StatusText.ShouldBe("Replaced 1 match.");
+    }
+
+    [Fact]
+    public void Replace_with_identical_text_advances_to_the_next_match()
+    {
+        using var viewModel = new MainViewModel();
+        viewModel.InsertText("one one");
+        viewModel.Selection = Selection.StartOf(viewModel.Document);
+        viewModel.OpenReplaceCommand.Execute(null);
+        viewModel.FindQuery = "one";
+        viewModel.FindNextCommand.Execute(null);
+        viewModel.ReplaceQuery = "one";
+
+        viewModel.ReplaceCommand.Execute(null);
+
+        viewModel.Document.PlainText.ShouldBe("one one");
+        viewModel.FindStatusText.ShouldBe("Match 2 of 2.");
         viewModel.StatusText.ShouldBe("Replaced 1 match.");
     }
 

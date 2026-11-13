@@ -324,7 +324,7 @@ public partial class MainViewModel
         UpdateFindStatus();
     }
 
-    private int FindForwardIndex()
+    private int FindForwardIndex(bool afterCaret = false)
     {
         var caret = _history.Selection.GetStart(Document);
 
@@ -333,8 +333,9 @@ public partial class MainViewModel
             var start = SearchEngine
                 .GetSelection(Document, _searchMatches[index])
                 .GetStart(Document);
+            var comparison = TextNavigation.Compare(Document, start, caret);
 
-            if (TextNavigation.Compare(Document, start, caret) >= 0)
+            if (afterCaret ? comparison > 0 : comparison >= 0)
             {
                 return index;
             }
@@ -371,7 +372,7 @@ public partial class MainViewModel
             return;
         }
 
-        var index = FindForwardIndex();
+        var index = FindForwardIndex(afterCaret: true);
 
         if (index < 0)
         {

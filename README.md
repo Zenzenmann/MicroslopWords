@@ -57,16 +57,13 @@ MicroslopWords is in **early, active development**. Core editing works today; th
 - Character formatting: font family, size, bold, italic, underline, strikethrough, text color, and highlight
 - Paragraph formatting: alignment, spacing, indents, bulleted and numbered lists (nine levels), and page breaks
 - Cut, copy, and paste with plain-text and HTML interop; command-based undo/redo
+- Named paragraph and character styles with a keyboard-operable styles panel
+- Find and replace across runs, with match-case and whole-word options, live highlights, and replace-all as one undo step
 - Crash recovery snapshots with a restore prompt on the next launch
 - Documents with unsafe or unsupported content open read-only instead of risking data loss
 
-**In progress**
-
-- Named styles: applying, inspecting, and editing style definitions
-
 **Planned for v1**
 
-- Find and replace
 - Tables and inline images
 - Headers, footers, and page numbers
 - Print and PDF export
