@@ -41,6 +41,48 @@ public sealed class DocxDocumentLoaderTests
     }
 
     [Fact]
+    public void Load_warns_when_an_embedded_image_cannot_be_decoded()
+    {
+        var path = TempPath(".docx");
+        var truncated = Convert.FromBase64String(PngBase64)[..40];
+        var image = new InlineImage(
+            ImageFormat.Png,
+            "broken.png",
+            [.. truncated],
+            100,
+            50,
+            75,
+            37.5,
+            "Broken");
+        var document = new Document(
+            Guid.NewGuid(),
+            "Broken image",
+            ImmutableArray.Create(new Section(
+                Guid.NewGuid(),
+                ImmutableArray.Create<Block>(new ParagraphBlock(
+                    Guid.NewGuid(),
+                    [Run.CreateImage(image)])))));
+
+        try
+        {
+            using (var stream = File.Create(path))
+            {
+                DocxService.Save(document, stream);
+            }
+
+            var result = _loader.Load(path, TestContext.Current.CancellationToken);
+
+            result.IsSuccess.ShouldBeTrue();
+            result.Diagnostics.ShouldContain(diagnostic =>
+                diagnostic.Code == DocxDiagnosticCodes.UnsupportedImage);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void Load_missing_file_returns_file_missing_diagnostic()
     {
         var result = _loader.Load(TempPath(".docx"), TestContext.Current.CancellationToken);
@@ -124,6 +166,8 @@ public sealed class DocxDocumentLoaderTests
             File.Delete(path);
         }
     }
+
+    private const string PngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAGQAAAAyCAIAAAAlV+npAAAAhUlEQVR4nO3SMREAIBADQUAI/qUgCwt//W6d6ib73buYOcMdYjWeFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYgViBWIFYi15j5uMQFoB1/W+QAAAABJRU5ErkJggg==";
 
     private static string TempPath(string extension) =>
         Path.Combine(Path.GetTempPath(), $"msw-{Guid.NewGuid():N}{extension}");

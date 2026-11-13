@@ -6,7 +6,8 @@ public sealed record ClipboardContent(
     string Text,
     string? Html = null,
     DocumentFragment? Fragment = null,
-    bool HasImage = false);
+    bool HasImage = false,
+    byte[]? ImagePng = null);
 
 public interface IClipboardService
 {

@@ -159,6 +159,29 @@ internal static class CharacterFormatting
 
             var properties = CreateDirect(run, paragraph, document.EffectiveStyles, transform);
 
+            if (run.EffectiveImage is not null)
+            {
+                if (from == 0 && to == run.Text.Length)
+                {
+                    if (!Equals(properties, run.Properties))
+                    {
+                        changed = true;
+                        runs.Add(run with { Properties = properties });
+                    }
+                    else
+                    {
+                        runs.Add(run);
+                    }
+                }
+                else
+                {
+                    runs.Add(run);
+                }
+
+                runStart = runEnd;
+                continue;
+            }
+
             if (from == 0 && to == run.Text.Length)
             {
                 if (!Equals(properties, run.Properties))
