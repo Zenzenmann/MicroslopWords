@@ -1,10 +1,10 @@
+using System.Runtime.InteropServices;
 using HarfBuzzSharp;
 
 namespace MicroslopWords.Layout;
 
 public sealed class FontFace : IDisposable
 {
-    private readonly MemoryStream _stream;
     private readonly Blob _blob;
     private readonly Face _face;
 
@@ -21,16 +21,32 @@ public sealed class FontFace : IDisposable
         Family = family;
         Weight = weight;
         Slant = slant;
-        _stream = new MemoryStream(fontData, writable: false);
+
+        var handle = GCHandle.Alloc(fontData, GCHandleType.Pinned);
 
         try
         {
-            _blob = Blob.FromStream(_stream);
+            // Duplicate mode makes HarfBuzz own a copy; Blob.FromStream keeps a
+            // pointer to a collectible array and intermittently shapes freed memory.
+            _blob = new Blob(handle.AddrOfPinnedObject(), fontData.Length, MemoryMode.Duplicate);
+        }
+        catch
+        {
+            _blob?.Dispose();
+            throw;
+        }
+        finally
+        {
+            handle.Free();
+        }
+
+        try
+        {
             _face = new Face(_blob, 0);
         }
-        catch (DllNotFoundException)
+        catch
         {
-            _stream.Dispose();
+            _blob.Dispose();
             throw;
         }
 
@@ -40,7 +56,6 @@ public sealed class FontFace : IDisposable
         {
             _face.Dispose();
             _blob.Dispose();
-            _stream.Dispose();
 
             throw new ArgumentException(
                 "Font data does not contain any glyphs.",
@@ -73,6 +88,5 @@ public sealed class FontFace : IDisposable
     {
         _face.Dispose();
         _blob.Dispose();
-        _stream.Dispose();
     }
 }

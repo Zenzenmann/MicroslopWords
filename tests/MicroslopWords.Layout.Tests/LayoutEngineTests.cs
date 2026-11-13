@@ -55,13 +55,14 @@ public sealed class LayoutEngineTests
     {
         var document = CreateDocument(string.Join(' ', Enumerable.Repeat("word", 200)));
         var engine = new LayoutEngine();
-        var catalog = LoadSystemCatalog();
+        using var face = LoadSystemFontFace();
 
-        if (catalog is null)
+        if (face is null)
         {
             return;
         }
 
+        var catalog = FontCatalog.Create([face]);
         var first = engine.Layout(document, catalog);
         var second = engine.Layout(document, catalog);
 
@@ -203,14 +204,13 @@ public sealed class LayoutEngineTests
         layout.Pages[0].Paragraphs.Length.ShouldBe(1);
     }
 
-    private static FontCatalog? LoadSystemCatalog()
+    private static FontFace? LoadSystemFontFace()
     {
         var bytes = TestFonts.TryLoadBytes();
 
         return bytes is null
             ? null
-            : FontCatalog.Create(
-                [new FontFace("Test", FontWeight.Regular, FontSlant.Upright, bytes)]);
+            : new FontFace("Test", FontWeight.Regular, FontSlant.Upright, bytes);
     }
 
     private static Document CreateDocument(string text) =>
