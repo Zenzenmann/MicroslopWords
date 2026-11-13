@@ -223,6 +223,11 @@ public partial class MainViewModel
 
     private void ShowFindPanel(bool replace)
     {
+        if (IsHeaderFooterMode)
+        {
+            ExitHeaderFooterMode();
+        }
+
         var wasOpen = IsFindPanelOpen;
 
         IsFindPanelOpen = true;

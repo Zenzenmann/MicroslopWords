@@ -231,6 +231,123 @@ public sealed class SearchAndReplaceTests
         paragraphs[1].PlainText.ShouldBe("two bar");
     }
 
+    [Fact]
+    public void Find_finds_matches_inside_table_cells()
+    {
+        var (document, _, paragraphId) = CreateTableDocument("inside table");
+
+        var matches = SearchEngine.Find(document, "inside");
+
+        matches.Length.ShouldBe(1);
+        matches[0].ParagraphId.ShouldBe(paragraphId);
+        SearchEngine.GetSelection(document, matches[0]).IsCollapsed.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void ReplaceMatch_replaces_text_inside_a_table_cell()
+    {
+        var (document, table, paragraphId) = CreateTableDocument("old value");
+        var match = SearchEngine.Find(document, "old").Single();
+        var history = new CommandHistory(document);
+
+        history.Execute(new ReplaceMatchCommand(history.Selection, match, "new"));
+
+        history.Current.FindParagraph(paragraphId)!.PlainText.ShouldBe("new value");
+        history.Current.FindTable(table.Id)!.Rows[0].Cells[0]
+            .Paragraphs[0].PlainText.ShouldBe("new value");
+
+        history.Undo();
+        history.Current.ShouldBeSameAs(document);
+    }
+
+    [Fact]
+    public void ReplaceAll_replaces_text_inside_table_cells()
+    {
+        var (document, table, paragraphId) = CreateTableDocument("old value");
+        var history = new CommandHistory(document);
+
+        history.Execute(new ReplaceAllCommand(history.Selection, "old", "new"));
+
+        history.Current.FindParagraph(paragraphId)!.PlainText.ShouldBe("new value");
+        history.Current.FindTable(table.Id)!.Rows[0].Cells[0]
+            .Paragraphs[0].PlainText.ShouldBe("new value");
+        history.Current.FindTable(table.Id).ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void ReplaceAll_preserves_inline_images_in_the_paragraph()
+    {
+        var image = new InlineImage(
+            ImageFormat.Png,
+            "image.png",
+            ImmutableArray.Create<byte>(1, 2, 3),
+            1,
+            1,
+            20,
+            20);
+        var imageRun = Run.CreateImage(image);
+        var paragraph = ParagraphWithRuns(
+            Run.Create("before "),
+            imageRun,
+            Run.Create(" after"));
+        var document = CreateDocument(paragraph);
+        var history = new CommandHistory(document);
+
+        history.Execute(new ReplaceAllCommand(
+            history.Selection,
+            "before",
+            "BEFORE"));
+
+        var updated = Paragraphs(history.Current).Single();
+        updated.PlainText.ShouldBe("BEFORE \uFFFC after");
+        var preserved = updated.Runs.Single(run => run.EffectiveImage is not null);
+        preserved.Id.ShouldBe(imageRun.Id);
+        preserved.Image.ShouldBeSameAs(image);
+    }
+
+    [Fact]
+    public void ReplaceAll_preserves_page_field_runs()
+    {
+        var field = Run.CreatePageField(PageFieldKind.PageNumber);
+        var paragraph = ParagraphWithRuns(
+            Run.Create("page "),
+            field,
+            Run.Create(" end"));
+        var document = CreateDocument(paragraph);
+        var history = new CommandHistory(document);
+
+        history.Execute(new ReplaceAllCommand(
+            history.Selection,
+            "page",
+            "PAGE"));
+
+        var updated = Paragraphs(history.Current).Single();
+        updated.PlainText.ShouldBe("PAGE  end");
+        var preserved = updated.Runs.Single(run => run.PageField is not null);
+        preserved.Id.ShouldBe(field.Id);
+        preserved.PageField.ShouldBe(PageFieldKind.PageNumber);
+    }
+
+    private static (Document Document, TableBlock Table, Guid ParagraphId)
+        CreateTableDocument(string cellText)
+    {
+        var table = TableBlock.Create(rows: 1, columns: 2, hasHeaderRow: false);
+        var row = table.Rows[0];
+        var paragraph = ParagraphBlock.Create(cellText);
+        var cell = row.Cells[0] with { Paragraphs = [paragraph] };
+        row = row with { Cells = row.Cells.SetItem(0, cell) };
+        table = table.WithRows([row]);
+        var section = new Section(
+            Guid.NewGuid(),
+            ImmutableArray.Create<Block>(table));
+        var document = new Document(
+            Guid.NewGuid(),
+            "Test",
+            ImmutableArray.Create(section));
+
+        return (document, table, paragraph.Id);
+    }
+
     private static ParagraphBlock ParagraphWithRuns(params Run[] runs) =>
         new(Guid.NewGuid(), runs.ToImmutableArray());
 

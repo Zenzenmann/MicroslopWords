@@ -42,7 +42,7 @@ It is deliberately not a Word clone. Macros, real-time coauthoring, cloud sync, 
 
 - **Local-first, always.** No account, no cloud, no telemetry. Documents never leave your machine, and the editor makes no network calls while opening, editing, saving, or printing.
 - **Deterministic by construction.** Layout is a pure function of the document, styles, page settings, and fonts, so identical inputs always produce identical pages. Screen, print, and PDF are designed around that one layout engine.
-- **DOCX that stays DOCX.** Edits are saved as document structure — paragraphs, runs, styles, and lists — not flattened text. Unsupported content is preserved where it is safe and disclosed before it can be lost.
+- **DOCX that stays DOCX.** Edits are saved as document structure — paragraphs, runs, styles, lists, tables, images, and headers — not flattened text. Unsupported content is preserved where it is safe and disclosed before it can be lost.
 - **A codebase you can read.** Six focused projects with one-way dependencies, architecture decision records, an executable spec, and tests for every new behavior.
 
 ## Status
@@ -58,16 +58,18 @@ MicroslopWords is in **early, active development**. Core editing works today; th
 - Paragraph formatting: alignment, spacing, indents, bulleted and numbered lists (nine levels), and page breaks
 - Cut, copy, and paste with plain-text and HTML interop; command-based undo/redo
 - Named paragraph and character styles with a keyboard-operable styles panel
-- Find and replace across runs, with match-case and whole-word options, live highlights, and replace-all as one undo step
+- Find and replace across runs and table cells, with match-case and whole-word options, live highlights, and replace-all as one undo step
+- Tables with editable cells, rectangular merge/split, repeated header rows, widths, borders, and shading
+- Inline PNG, JPEG, and GIF images with sizing, aspect-ratio lock, alt text, and safe placeholders for corrupt media
+- Per-section headers and footers, first-page variants, link/unlink, and live page-number fields
 - Crash recovery snapshots with a restore prompt on the next launch
 - Documents with unsafe or unsupported content open read-only instead of risking data loss
 
 **Planned for v1**
 
-- Tables and inline images
-- Headers, footers, and page numbers
 - Print and PDF export
 - Accessibility, keyboard map, themes, and settings
+- Corpus-wide DOCX fidelity, unsupported-content warnings, and package hardening
 - Headless CLI for inspection, validation, text extraction, and PDF export
 - Self-contained releases for Windows, macOS, and Linux
 
