@@ -178,6 +178,17 @@ internal static class ReplaceOperations
                 rangeIndex++;
             }
 
+            var overlaps = rangeIndex < ranges.Length
+                && ranges[rangeIndex].Start < runEnd
+                && ranges[rangeIndex].End > runStart;
+
+            if (!overlaps)
+            {
+                runs.Add(run);
+                cursor = runEnd;
+                continue;
+            }
+
             while (local < run.Text.Length && rangeIndex < ranges.Length)
             {
                 var range = ranges[rangeIndex];
@@ -230,7 +241,12 @@ internal static class ReplaceOperations
     }
 
     private static Run Segment(Run source, string text, bool keepId) =>
-        new(keepId ? source.Id : Guid.NewGuid(), text, source.Properties);
+        new(
+            keepId ? source.Id : Guid.NewGuid(),
+            text,
+            source.Properties,
+            text == source.Text ? source.Image : null,
+            text == source.Text ? source.PageField : null);
 
     private static RunProperties? PropertiesAt(
         ParagraphBlock paragraph,
