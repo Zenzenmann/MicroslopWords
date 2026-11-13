@@ -421,6 +421,9 @@ Story: $title
 Local gates passed: dotnet build, dotnet test, dotnet format --verify-no-changes, git diff --check.
 Required CI checks: build-test (ubuntu-latest), build-test (windows-latest), build-test (macos-latest), format.
 "@
+    $prBodyPath = Join-Path $logDir "$Story-pr-body.md"
+    New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+    $prBody | Set-Content -LiteralPath $prBodyPath -Encoding utf8
 
     Write-Host "Opening or updating the pull request for $branch."
     $prView = Invoke-NativeCapture -FilePath 'gh' -Arguments @('pr', 'view', $branch, '--json', 'number,state,url') -LogPath $prLog
@@ -440,7 +443,7 @@ Required CI checks: build-test (ubuntu-latest), build-test (windows-latest), bui
             '--base', 'main',
             '--head', $branch,
             '--title', $commitMessage,
-            '--body', $prBody
+            '--body-file', $prBodyPath
         ) -LogPath $prLog
         if ($prCreate.ExitCode -ne 0) {
             throw "gh pr create failed with exit code $($prCreate.ExitCode)."
