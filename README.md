@@ -36,12 +36,14 @@
 
 MicroslopWords is an open-source word processor built with C#, Avalonia, and a native Skia rendering pipeline. It is a practical DOCX editor, not a clone of every Microsoft Word feature: the goal is predictable editing, faithful round-tripping of the documents people actually exchange, and a small, inspectable codebase.
 
+It is deliberately not a Word clone. Macros, real-time coauthoring, cloud sync, an add-in marketplace, and 100% Word fidelity are out of scope.
+
 ## Why MicroslopWords
 
 - **Local-first, always.** No account, no cloud, no telemetry. Documents never leave your machine, and the editor makes no network calls while opening, editing, saving, or printing.
-- **Deterministic by construction.** Layout is a pure function of the document, styles, page settings, and fonts. Screen, print, and PDF share one layout engine, so what you see is what you get.
+- **Deterministic by construction.** Layout is a pure function of the document, styles, page settings, and fonts, so identical inputs always produce identical pages. Screen, print, and PDF are designed around that one layout engine.
 - **DOCX that stays DOCX.** Edits are saved as document structure — paragraphs, runs, styles, and lists — not flattened text. Unsupported content is preserved where it is safe and disclosed before it can be lost.
-- **A codebase you can read.** Six focused projects with one-way dependencies, architecture decision records, an executable spec, and tests for every behavior.
+- **A codebase you can read.** Six focused projects with one-way dependencies, architecture decision records, an executable spec, and tests for every new behavior.
 
 ## Status
 
@@ -49,7 +51,7 @@ MicroslopWords is in **early, active development**. Core editing works today; th
 
 **Available now**
 
-- Open, create, and save `.docx` files, including Save As, atomic writes, and unsaved-change tracking
+- Open, create, and save `.docx` files with Save As, atomic writes, and unsaved-change tracking
 - Paginated editing with caret, selection, IME input, paragraph split/merge, and soft breaks
 - Zoom from 25% to 400%, with fit-width and fit-page
 - Character formatting: font family, size, bold, italic, underline, strikethrough, text color, and highlight
@@ -118,7 +120,7 @@ flowchart LR
     cli --> core
 ```
 
-Arrows point from a project to the projects it references. The direction is enforced: Core knows nothing about UI, OOXML, Skia, or the file system; Layout is a pure, headless function of document state; Rendering never reflows text.
+Arrows point from a project to the projects it references. The direction is enforced: Core knows nothing about UI, OOXML, Skia, or the file system; Layout is a pure, headless function of document state; Rendering never reflows text. Every edit is an invertible command, and layout never mutates the document.
 
 | Project | Responsibility |
 | --- | --- |
@@ -154,13 +156,6 @@ scripts/                        Automation and developer tooling
 
 </details>
 
-### Design principles
-
-- **Every edit is a command.** Undo, redo, and future collaboration all flow through one invertible history.
-- **Layout is pure and deterministic.** Same document, styles, settings, fonts, and engine version produce the same pages.
-- **Identity is stable.** Sections, blocks, and runs keep their IDs for the lifetime of a document.
-- **Untrusted input stays untrusted.** No macros, ActiveX, OLE, scripts, or embedded executables; no network fetch on open, edit, save, or print.
-
 ## Contributing
 
 Contributions of every size are welcome — bug reports, DOCX fixtures, documentation, and code.
@@ -179,7 +174,7 @@ See [`AGENTS.md`](AGENTS.md) for the agent contract and [`docs/adr/`](docs/adr/)
 
 ## Security
 
-DOCX files are treated as untrusted input. Please report vulnerabilities privately through the repository's **Security** tab; do not open a public issue. See [`SECURITY.md`](SECURITY.md) for scope and disclosure policy.
+DOCX files are treated as untrusted input: macros, ActiveX, OLE, scripts, and embedded executables are never executed, and no network fetch happens during open, edit, save, or print. Please report vulnerabilities privately through the repository's **Security** tab; do not open a public issue. See [`SECURITY.md`](SECURITY.md) for scope and disclosure policy.
 
 ## License
 
