@@ -15,6 +15,20 @@ public enum ListKind
     Numbered,
 }
 
+[Flags]
+public enum ParagraphPropertyOverrides
+{
+    None = 0,
+    Alignment = 1 << 0,
+    SpaceBefore = 1 << 1,
+    SpaceAfter = 1 << 2,
+    LineSpacing = 1 << 3,
+    LeftIndent = 1 << 4,
+    RightIndent = 1 << 5,
+    FirstLineIndent = 1 << 6,
+    List = 1 << 7,
+}
+
 public sealed record ParagraphProperties
 {
     public ParagraphAlignment Alignment { get; init; } = ParagraphAlignment.Left;
@@ -38,6 +52,8 @@ public sealed record ParagraphProperties
     public Guid? ListId { get; init; }
 
     public string? StyleId { get; init; }
+
+    public ParagraphPropertyOverrides Overrides { get; init; }
 
     public static ParagraphProperties Default { get; } = new();
 }

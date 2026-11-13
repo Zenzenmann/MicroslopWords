@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Globalization;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
+using MicroslopWords.Core.Styles;
 
 namespace MicroslopWords.Layout;
 
@@ -35,11 +36,13 @@ public sealed class LayoutEngine
         Document document,
         FontCatalog? fontCatalog = null,
         PageSettings? pageSettings = null,
-        LayoutConstraints? constraints = null)
+        LayoutConstraints? constraints = null,
+        StyleSheet? styles = null)
     {
         ArgumentNullException.ThrowIfNull(document);
 
         var catalog = fontCatalog ?? _fontCatalog;
+        var styleSheet = styles ?? document.EffectiveStyles;
         var defaultPage = pageSettings
             ?? document.Sections.FirstOrDefault()?.EffectivePage
             ?? PageSettings.Letter;
@@ -49,7 +52,7 @@ public sealed class LayoutEngine
         var pageBottom = activePage.MarginTopPoints + contentHeight;
 
         using var shaper = new TextShaper(catalog);
-        var listLabels = BuildListLabels(document);
+        var listLabels = BuildListLabels(document, styleSheet);
         var pageBreaks = ImmutableArray.CreateBuilder<PageBreakLayout>();
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
         var pages = ImmutableArray.CreateBuilder<PageLayout>();
@@ -93,7 +96,7 @@ public sealed class LayoutEngine
 
             foreach (var paragraph in section.Blocks.OfType<ParagraphBlock>())
             {
-                var properties = paragraph.EffectiveProperties;
+                var properties = StyleResolver.ResolveParagraph(paragraph, styleSheet);
                 var isList = properties.ListKind != ListKind.None;
                 var listLevel = Math.Clamp(properties.ListLevel, 1, 9);
                 var listLabel = isList && listLabels.TryGetValue(paragraph.Id, out var label)
@@ -149,8 +152,9 @@ public sealed class LayoutEngine
 
                 var segments = SplitTextSegments(paragraph.PlainText);
                 var defaultProperties = paragraph.Runs.Length == 0
-                    ? RunProperties.Default
-                    : paragraph.Runs[0].EffectiveProperties;
+                    ? styleSheet.FindParagraphStyle(properties.StyleId)?.CharacterProperties
+                        ?? RunProperties.Default
+                    : StyleResolver.ResolveRun(paragraph.Runs[0], paragraph, styleSheet);
                 var defaultFont = ResolveFontRequest(defaultProperties);
                 var afterSoftBreak = false;
 
@@ -164,7 +168,8 @@ public sealed class LayoutEngine
                         shaper,
                         diagnostics,
                         defaultFont,
-                        defaultProperties.FontSizePoints);
+                        defaultProperties.FontSizePoints,
+                        styleSheet);
                     var lines = WrapStyledText(
                         segment.Text,
                         segment.Start,
@@ -289,7 +294,8 @@ public sealed class LayoutEngine
         TextShaper shaper,
         ImmutableArray<Diagnostic>.Builder diagnostics,
         FontKey defaultFont,
-        double defaultFontSize)
+        double defaultFontSize,
+        StyleSheet styleSheet)
     {
         var segmentEnd = segmentStart + segmentLength;
         var clusters = ImmutableArray.CreateBuilder<StyledCluster>();
@@ -309,7 +315,7 @@ public sealed class LayoutEngine
                 continue;
             }
 
-            var properties = run.EffectiveProperties;
+            var properties = StyleResolver.ResolveRun(run, paragraph, styleSheet);
             var font = ResolveFontRequest(properties);
             var text = run.Text[(from - runStart)..(to - runStart)];
             var shaped = shaper.Shape(text, font, properties.FontSizePoints);
@@ -562,7 +568,9 @@ public sealed class LayoutEngine
             properties.Bold ? FontWeight.Bold : FontWeight.Regular,
             properties.Italic ? FontSlant.Italic : FontSlant.Upright);
 
-    private static Dictionary<Guid, string> BuildListLabels(Document document)
+    private static Dictionary<Guid, string> BuildListLabels(
+        Document document,
+        StyleSheet styleSheet)
     {
         var labels = new Dictionary<Guid, string>();
         var counters = new Dictionary<Guid, Dictionary<int, int>>();
@@ -571,7 +579,7 @@ public sealed class LayoutEngine
                      .SelectMany(section => section.Blocks)
                      .OfType<ParagraphBlock>())
         {
-            var properties = paragraph.EffectiveProperties;
+            var properties = StyleResolver.ResolveParagraph(paragraph, styleSheet);
 
             if (properties.ListKind == ListKind.None)
             {

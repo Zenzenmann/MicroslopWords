@@ -1,14 +1,22 @@
 using System.Collections.Immutable;
+using MicroslopWords.Core.Styles;
 
 namespace MicroslopWords.Core.Documents;
 
 public sealed record Document(
     Guid Id,
     string Title,
-    ImmutableArray<Section> Sections)
+    ImmutableArray<Section> Sections,
+    StyleSheet? Styles = null)
 {
     public static Document CreateEmpty(string title = "Untitled") =>
-        new(Guid.NewGuid(), title, ImmutableArray.Create(Section.CreateEmpty()));
+        new(
+            Guid.NewGuid(),
+            title,
+            ImmutableArray.Create(Section.CreateEmpty()),
+            StyleSheet.Default);
+
+    public StyleSheet EffectiveStyles => Styles ?? StyleSheet.Default;
 
     public string PlainText =>
         string.Join(
