@@ -29,8 +29,9 @@ Questions and decisions intentionally deferred from planning. Resolve the item a
 - `STORY-001` is read-only by design; editable CAP-1 behavior is completed in `STORY-006`.
 - Manual IME smoke on Windows, macOS, and Linux remains for release validation; `STORY-006` covers the simulated IME client and headless composition flow.
 - `STORY-007` clipboard supports plain text, sanitized HTML, and an in-memory internal fragment. RTF is intentionally not implemented because HTML satisfies the optional requirement. HTML list markup pastes as prefixed paragraphs until `STORY-009` adds structured lists.
-- `STORY-008` writes run highlight as `w:shd` fill and imports both `w:highlight` and `w:shd`; style-based inheritance remains default-only until `STORY-010`.
+- `STORY-008` writes run highlight as `w:shd` fill and imports both `w:highlight` and `w:shd`; style-based inheritance is completed in `STORY-010` through per-property direct-override flags.
 - `STORY-009` models lists with a list identity, kind, and level; layout computes bullet/decimal labels, and DOCX numbering definitions are regenerated on save. Page breaks are stored as `\f` in run text so they remain selectable/deletable and map to `w:br w:type="page"`.
+- `STORY-010` stores the document `StyleSheet`, resolves paragraph and character styles with per-property override flags, and round-trips `styles.xml`, `w:pStyle`, and `w:rStyle`. The styles panel supports apply, create, rename, delete, and update-from-selection; a full inheritance editor and style sets remain out of scope.
 - Human checkpoints are required after `STORY-016` and `STORY-020`, and SPEC checkpoints are required at `STORY-004`, `STORY-006`, `STORY-016`, `STORY-018`, and `STORY-020`.
 
 ## Build-Loop Failures

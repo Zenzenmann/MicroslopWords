@@ -6,6 +6,7 @@ using MicroslopWords.App.Services;
 using MicroslopWords.Core.Diagnostics;
 using MicroslopWords.Core.Documents;
 using MicroslopWords.Core.Editing;
+using MicroslopWords.Core.Styles;
 using MicroslopWords.Formats.Docx;
 using MicroslopWords.Layout;
 
@@ -41,6 +42,10 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     private bool _recoveryUnavailableNoticeShown;
     private bool _applyingFit;
     private bool _updatingSelection;
+    private bool _updatingStyles;
+    private bool _styleEditorIsNew;
+    private string? _editingStyleId;
+    private string? _stylePendingDeleteId;
     private RunProperties? _pendingCharacterProperties;
     private int _documentGeneration;
 
@@ -339,6 +344,45 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     [ObservableProperty]
     public partial string HangingIndentInput { get; set; } = "0";
+
+    [ObservableProperty]
+    public partial bool IsStylesPanelOpen { get; set; }
+
+    [ObservableProperty]
+    public partial IReadOnlyList<StyleListItem> StyleItems { get; set; } = [];
+
+    [ObservableProperty]
+    public partial StyleListItem? SelectedStyle { get; set; }
+
+    [ObservableProperty]
+    public partial string CurrentParagraphStyleName { get; set; } = "Normal";
+
+    [ObservableProperty]
+    public partial string CurrentCharacterStyleName { get; set; } = "Default";
+
+    [ObservableProperty]
+    public partial bool IsStyleMixed { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsStyleEditorOpen { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsStyleDeleteConfirmationOpen { get; set; }
+
+    [ObservableProperty]
+    public partial string StyleEditorName { get; set; } = "New Style";
+
+    [ObservableProperty]
+    public partial string StyleEditorKind { get; set; } = "Paragraph";
+
+    [ObservableProperty]
+    public partial bool IsStyleKindEditable { get; set; } = true;
+
+    public IReadOnlyList<string> StyleKinds { get; } = ["Paragraph", "Character"];
+
+    [ObservableProperty]
+    public partial string StyleDeletePrompt { get; set; } = string.Empty;
+
     public bool IsFontFamilyMixed => SelectedFontFamily is null;
 
     public bool IsFontSizeMixed => SelectedFontSize is null;
@@ -518,12 +562,16 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     {
         if (_history.Selection.IsCollapsed)
         {
-            _pendingCharacterProperties = RunProperties.Default;
+            var effective = EffectivePropertiesAtCaret();
+            _pendingCharacterProperties = new RunProperties
+            {
+                StyleId = effective.StyleId,
+            };
             RefreshCharacterFormattingState();
             return;
         }
 
-        ExecuteEdit(new FormatSelectionCommand(_history.Selection, _ => null));
+        ExecuteEdit(new ClearCharacterFormattingCommand(_history.Selection));
         _pendingCharacterProperties = null;
         RefreshCharacterFormattingState();
     }
@@ -676,19 +724,237 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
     private void ClearParagraphFormatting()
     {
-        ExecuteEdit(new ApplyParagraphPropertiesCommand(
-            _history.Selection,
-            properties => properties.ListKind != ListKind.None
-                || properties.StyleId is not null
-                    ? new ParagraphProperties
-                    {
-                        ListKind = properties.ListKind,
-                        ListLevel = properties.ListLevel,
-                        ListId = properties.ListId,
-                        StyleId = properties.StyleId,
-                    }
-                    : null));
+        ExecuteEdit(new ClearParagraphFormattingCommand(_history.Selection));
         RefreshParagraphFormattingState();
+    }
+
+    [RelayCommand]
+    private void ToggleStylesPanel() => IsStylesPanelOpen = !IsStylesPanelOpen;
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void NewStyle()
+    {
+        _styleEditorIsNew = true;
+        _editingStyleId = null;
+        StyleEditorName = "New Style";
+        StyleEditorKind = "Paragraph";
+        IsStyleKindEditable = true;
+        IsStyleDeleteConfirmationOpen = false;
+        IsStyleEditorOpen = true;
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void ModifyStyle()
+    {
+        if (SelectedStyle is null)
+        {
+            return;
+        }
+
+        _styleEditorIsNew = false;
+        _editingStyleId = SelectedStyle.Id;
+        StyleEditorName = SelectedStyle.Name;
+        StyleEditorKind = SelectedStyle.Kind;
+        IsStyleKindEditable = false;
+        IsStyleDeleteConfirmationOpen = false;
+        IsStyleEditorOpen = true;
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void SaveStyle()
+    {
+        if (string.IsNullOrWhiteSpace(StyleEditorName))
+        {
+            ErrorMessage = "Style name is required.";
+            return;
+        }
+
+        try
+        {
+            if (_styleEditorIsNew)
+            {
+                if (string.Equals(StyleEditorKind, "Character", StringComparison.Ordinal))
+                {
+                    var command = new CreateCharacterStyleCommand(
+                        _history.Selection,
+                        StyleEditorName);
+                    ExecuteEdit(command);
+                    _pendingCharacterProperties = _history.Selection.IsCollapsed
+                        ? new RunProperties { StyleId = command.StyleId }
+                        : null;
+                }
+                else
+                {
+                    ExecuteEdit(new CreateParagraphStyleCommand(
+                        _history.Selection,
+                        StyleEditorName));
+                }
+            }
+            else if (_editingStyleId is not null)
+            {
+                ExecuteEdit(new RenameStyleCommand(
+                    _history.Selection,
+                    _editingStyleId,
+                    StyleEditorName));
+            }
+
+            IsStyleEditorOpen = false;
+            ErrorMessage = string.Empty;
+            RefreshStyleState();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelStyleEditor() => IsStyleEditorOpen = false;
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void UpdateStyleFromSelection()
+    {
+        if (SelectedStyle is null)
+        {
+            return;
+        }
+
+        var sheet = Document.EffectiveStyles;
+        var style = sheet.FindParagraphStyle(SelectedStyle.Id);
+
+        try
+        {
+            if (style is not null)
+            {
+                var paragraph = GetSelectedParagraphs().FirstOrDefault();
+
+                if (paragraph is null)
+                {
+                    return;
+                }
+
+                var paragraphProperties = StyleResolver.ResolveParagraph(paragraph, sheet);
+                var characterProperties = paragraph.Runs.Length > 0
+                    ? StyleResolver.ResolveRun(paragraph.Runs[0], paragraph, sheet)
+                    : style.CharacterProperties ?? RunProperties.Default;
+                ExecuteEdit(new EditParagraphStyleCommand(
+                    _history.Selection,
+                    style.Id,
+                    paragraphProperties,
+                    characterProperties));
+            }
+            else
+            {
+                var characterStyle = sheet.FindCharacterStyle(SelectedStyle.Id);
+
+                if (characterStyle is null)
+                {
+                    return;
+                }
+
+                ExecuteEdit(new EditCharacterStyleCommand(
+                    _history.Selection,
+                    characterStyle.Id,
+                    GetSelectedRunProperties().FirstOrDefault() ?? RunProperties.Default));
+            }
+
+            ErrorMessage = string.Empty;
+            RefreshStyleState();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
+    private void DeleteStyle()
+    {
+        if (SelectedStyle is null)
+        {
+            return;
+        }
+
+        if (SelectedStyle.Id is StyleSheet.NormalStyleId
+            or StyleSheet.DefaultCharacterStyleId)
+        {
+            ErrorMessage = "The default style cannot be deleted.";
+            return;
+        }
+
+        _stylePendingDeleteId = SelectedStyle.Id;
+        StyleDeletePrompt = $"Delete style \"{SelectedStyle.Name}\"?";
+        IsStyleDeleteConfirmationOpen = true;
+    }
+
+    [RelayCommand]
+    private void ConfirmDeleteStyle()
+    {
+        if (_stylePendingDeleteId is null)
+        {
+            IsStyleDeleteConfirmationOpen = false;
+            return;
+        }
+
+        try
+        {
+            ExecuteEdit(new DeleteStyleCommand(_history.Selection, _stylePendingDeleteId));
+            ErrorMessage = string.Empty;
+            IsStyleDeleteConfirmationOpen = false;
+            _stylePendingDeleteId = null;
+            RefreshStyleState();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
+    }
+
+    [RelayCommand]
+    private void CancelDeleteStyle()
+    {
+        _stylePendingDeleteId = null;
+        IsStyleDeleteConfirmationOpen = false;
+    }
+
+    public void ApplyStyle(StyleListItem style)
+    {
+        ArgumentNullException.ThrowIfNull(style);
+
+        if (!IsEditingEnabled || IsStyleAlreadyApplied(style))
+        {
+            return;
+        }
+
+        try
+        {
+            if (string.Equals(style.Kind, "Character", StringComparison.Ordinal))
+            {
+                if (_history.Selection.IsCollapsed)
+                {
+                    _pendingCharacterProperties = new RunProperties
+                    {
+                        StyleId = style.Id,
+                    };
+                    RefreshCharacterFormattingState();
+                    RefreshStyleState();
+                    return;
+                }
+
+                ExecuteEdit(new ApplyCharacterStyleCommand(_history.Selection, style.Id));
+            }
+            else
+            {
+                ExecuteEdit(new ApplyParagraphStyleCommand(_history.Selection, style.Id));
+            }
+
+            ErrorMessage = string.Empty;
+            RefreshStyleState();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ErrorMessage = exception.Message;
+        }
     }
 
     [RelayCommand(CanExecute = nameof(IsEditingEnabled))]
@@ -1113,6 +1379,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         NotifyHistoryCommands();
         RefreshCharacterFormattingState();
         RefreshParagraphFormattingState();
+        RefreshStyleState();
     }
 
     private void SyncSelectionFromHistory()
@@ -1193,6 +1460,17 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     partial void OnSelectedColorHexChanged(string? value) =>
         OnPropertyChanged(nameof(IsColorMixed));
 
+    partial void OnSelectedStyleChanged(StyleListItem? value)
+    {
+        if (_updatingStyles || value is null)
+        {
+            return;
+        }
+
+        ApplyStyle(value);
+    }
+
+
     partial void OnSelectionChanged(Selection value)
     {
         if (_updatingSelection)
@@ -1216,6 +1494,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         NotifyClipboardCommands();
         RefreshCharacterFormattingState();
         RefreshParagraphFormattingState();
+        RefreshStyleState();
     }
 
     partial void OnIsReadOnlyChanged(bool value) => NotifyEditingEnabledChanged();
@@ -1269,6 +1548,11 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         ApplyRightIndentCommand.NotifyCanExecuteChanged();
         ApplyFirstLineIndentCommand.NotifyCanExecuteChanged();
         ApplyHangingIndentCommand.NotifyCanExecuteChanged();
+        NewStyleCommand.NotifyCanExecuteChanged();
+        ModifyStyleCommand.NotifyCanExecuteChanged();
+        SaveStyleCommand.NotifyCanExecuteChanged();
+        UpdateStyleFromSelectionCommand.NotifyCanExecuteChanged();
+        DeleteStyleCommand.NotifyCanExecuteChanged();
         FindCommand.NotifyCanExecuteChanged();
         NotifyClipboardCommands();
     }
@@ -1561,6 +1845,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         NotifyHistoryCommands();
         RefreshCharacterFormattingState();
         RefreshParagraphFormattingState();
+        RefreshStyleState();
         UpdateWindowTitle();
     }
 
@@ -1708,9 +1993,14 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
         if (_history.Selection.IsCollapsed)
         {
-            var baseProperties = _pendingCharacterProperties
-                ?? EffectivePropertiesAtCaret();
-            _pendingCharacterProperties = transform(baseProperties);
+            var effective = EffectivePropertiesAtCaret();
+            var transformed = transform(effective);
+            var direct = _pendingCharacterProperties
+                ?? new RunProperties { StyleId = effective.StyleId };
+            _pendingCharacterProperties = StyleResolver.MergeOverrides(
+                direct,
+                effective,
+                transformed);
             RefreshCharacterFormattingState();
             return;
         }
@@ -1786,10 +2076,7 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
         if (_history.Selection.IsCollapsed)
         {
-            return
-            [
-                _pendingCharacterProperties ?? EffectivePropertiesAtCaret()
-            ];
+            return [EffectivePropertiesAtCaret()];
         }
 
         var selection = SelectionMap.Normalize(_history.Selection, Document);
@@ -1826,7 +2113,10 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
                 if (runEnd > selectionStart && runStart < selectionEnd)
                 {
-                    result.Add(run.EffectiveProperties);
+                    result.Add(StyleResolver.ResolveRun(
+                        run,
+                        paragraph,
+                        Document.EffectiveStyles));
                 }
 
                 runStart = runEnd;
@@ -1846,7 +2136,20 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         var selection = SelectionMap.Normalize(_history.Selection, Document);
         var paragraph = Document.FindParagraph(selection.Focus.ParagraphId);
 
-        if (paragraph is null || paragraph.Runs.Length == 0)
+        if (paragraph is null)
+        {
+            return _pendingCharacterProperties ?? RunProperties.Default;
+        }
+
+        if (_pendingCharacterProperties is not null)
+        {
+            return StyleResolver.ResolveRunProperties(
+                _pendingCharacterProperties,
+                paragraph,
+                Document.EffectiveStyles);
+        }
+
+        if (paragraph.Runs.Length == 0)
         {
             return RunProperties.Default;
         }
@@ -1855,7 +2158,10 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
             .FirstOrDefault(candidate => candidate.Id == selection.Focus.RunId)
             ?? paragraph.Runs[0];
 
-        return run.EffectiveProperties;
+        return StyleResolver.ResolveRun(
+            run,
+            paragraph,
+            Document.EffectiveStyles);
     }
 
     private static int GetParagraphOffset(ParagraphBlock paragraph, TextPosition position) =>
@@ -1938,11 +2244,102 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         return false;
     }
 
+    private bool IsStyleAlreadyApplied(StyleListItem style)
+    {
+        var sheet = Document.EffectiveStyles;
+
+        if (string.Equals(style.Kind, "Paragraph", StringComparison.Ordinal))
+        {
+            var paragraphs = GetSelectedParagraphs();
+
+            return paragraphs.Count > 0
+                && paragraphs.All(paragraph => string.Equals(
+                    StyleResolver.ResolveParagraph(paragraph, sheet).StyleId
+                        ?? StyleSheet.NormalStyleId,
+                    style.Id,
+                    StringComparison.Ordinal));
+        }
+
+        var properties = GetSelectedRunProperties();
+
+        return properties.Count > 0
+            && properties.All(run => string.Equals(
+                run.StyleId ?? StyleSheet.DefaultCharacterStyleId,
+                style.Id,
+                StringComparison.Ordinal));
+    }
+
+    private void RefreshStyleState()
+    {
+        var sheet = Document.EffectiveStyles;
+        var paragraphs = GetSelectedParagraphs();
+        var paragraphStyleIds = paragraphs
+            .Select(paragraph => StyleResolver.ResolveParagraph(paragraph, sheet).StyleId
+                ?? StyleSheet.NormalStyleId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var paragraphStyleMixed = paragraphStyleIds.Length > 1;
+        var currentParagraphStyleId = paragraphStyleIds.Length == 1
+            ? paragraphStyleIds[0]
+            : null;
+        var currentParagraphStyle = sheet.FindParagraphStyle(currentParagraphStyleId)
+            ?? sheet.FindParagraphStyle(StyleSheet.NormalStyleId);
+        CurrentParagraphStyleName = paragraphStyleMixed
+            ? "Mixed"
+            : currentParagraphStyle?.Name ?? "Normal";
+
+        var runStyleIds = GetSelectedRunProperties()
+            .Select(properties => properties.StyleId ?? StyleSheet.DefaultCharacterStyleId)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var runStyleMixed = runStyleIds.Length > 1;
+        var currentCharacterStyleId = runStyleIds.Length == 1
+            ? runStyleIds[0]
+            : null;
+        var currentCharacterStyle = sheet.FindCharacterStyle(currentCharacterStyleId)
+            ?? sheet.FindCharacterStyle(StyleSheet.DefaultCharacterStyleId);
+        CurrentCharacterStyleName = runStyleMixed
+            ? "Mixed"
+            : currentCharacterStyle?.Name ?? "Default";
+        IsStyleMixed = paragraphStyleMixed || runStyleMixed;
+
+        _updatingStyles = true;
+
+        try
+        {
+            var items = new List<StyleListItem>();
+
+            foreach (var style in sheet.ParagraphStyles)
+            {
+                items.Add(StyleListItem.FromParagraphStyle(
+                    style,
+                    string.Equals(style.Id, currentParagraphStyleId, StringComparison.Ordinal)));
+            }
+
+            foreach (var style in sheet.CharacterStyles)
+            {
+                items.Add(StyleListItem.FromCharacterStyle(
+                    style,
+                    string.Equals(style.Id, currentCharacterStyleId, StringComparison.Ordinal)));
+            }
+
+            StyleItems = items;
+            SelectedStyle = items.FirstOrDefault(item =>
+                string.Equals(item.Kind, "Paragraph", StringComparison.Ordinal)
+                && string.Equals(item.Id, currentParagraphStyleId, StringComparison.Ordinal));
+        }
+        finally
+        {
+            _updatingStyles = false;
+        }
+    }
+
     private void RefreshParagraphFormattingState()
     {
         var paragraphs = GetSelectedParagraphs();
+        var sheet = Document.EffectiveStyles;
         var properties = paragraphs
-            .Select(paragraph => paragraph.EffectiveProperties)
+            .Select(paragraph => StyleResolver.ResolveParagraph(paragraph, sheet))
             .ToList();
 
         if (properties.Count == 0)
