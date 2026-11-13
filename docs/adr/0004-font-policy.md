@@ -48,6 +48,26 @@ iteration only by deferring the bundling decision, and it does not by itself wid
 any project boundary: `Layout` references only `Core` and HarfBuzzSharp (AD-1), and
 the file-loading port lives in `App`.
 
+## PDF embedding addendum (STORY-015)
+
+- Decision (2026-11-13): PDF export embeds the fonts used by the layout from the
+  active `FontCatalog` through the Skia PDF backend. The pinned SkiaSharp
+  3.119.4 build does not expose Skia's optional HarfBuzz font subsetter, so the
+  embedded font data is currently the full face rather than a subset. No font
+  binary is bundled, vendored, or added to the repository by this policy.
+  Subsetting remains a follow-up if the SkiaSharp stack gains that capability.
+- The rendered text remains selectable and searchable. Layout metrics and page
+  geometry continue to come from the same `DocumentLayout` used on screen.
+- If a document face cannot be resolved, layout already emits its substitution
+  diagnostic and the PDF uses the same fallback face; the exporter does not add
+  a second, conflicting font-selection policy.
+- The exporter does not inspect or enforce the OS/2 `fsType` embedding bits. The
+  maintainers accepted that users are responsible for the embedding rights of
+  fonts installed on their own machines, and no redistributable font asset is
+  introduced by the application.
+- This resolves DEF-001 and DEF-012 for v1. Any future bundled font set must
+  come back through the licensing review and a new ADR update.
+
 ## Consequences
 
 Positive:

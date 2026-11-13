@@ -61,6 +61,10 @@
         <KeyBinding Gesture="Shift+F3" Command="{Binding FindPreviousCommand}" />
         <KeyBinding Gesture="Escape" Command="{Binding CloseFindCommand}" />
         <KeyBinding Gesture="Escape" Command="{Binding ExitHeaderFooterModeCommand}" />
+        <KeyBinding Gesture="Ctrl+P" Command="{Binding PrintCommand}" />
+        <KeyBinding Gesture="Meta+P" Command="{Binding PrintCommand}" />
+        <KeyBinding Gesture="Ctrl+Shift+E" Command="{Binding ExportPdfCommand}" />
+        <KeyBinding Gesture="Meta+Shift+E" Command="{Binding ExportPdfCommand}" />
     </Window.KeyBindings>
 
     <DockPanel>
@@ -70,6 +74,9 @@
                 <MenuItem Header="_Open..." Command="{Binding OpenDocumentCommand}" />
                 <MenuItem Header="_Save" Command="{Binding SaveDocumentCommand}" />
                 <MenuItem Header="Save _As..." Command="{Binding SaveDocumentAsCommand}" />
+                <Separator />
+                <MenuItem Header="_Export PDF..." Command="{Binding ExportPdfCommand}" />
+                <MenuItem Header="_Print..." Command="{Binding PrintCommand}" />
                 <Separator />
                 <MenuItem Header="E_xit" />
             </MenuItem>
@@ -394,6 +401,19 @@
                 <ProgressBar Width="180" IsIndeterminate="True" />
                 <TextBlock Text="Saving document..." FontSize="12" VerticalAlignment="Center" />
                 <Button Content="Cancel" Command="{Binding CancelSaveCommand}" />
+            </StackPanel>
+        </Border>
+
+        <Border DockPanel.Dock="Top"
+                Background="#F7F7F7"
+                BorderBrush="#D8D8D8"
+                BorderThickness="0,0,0,1"
+                Padding="10,6"
+                IsVisible="{Binding IsExporting}">
+            <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                <ProgressBar Width="180" IsIndeterminate="True" />
+                <TextBlock Text="{Binding OutputProgressText}" FontSize="12" VerticalAlignment="Center" />
+                <Button Content="Cancel" Command="{Binding CancelExportCommand}" />
             </StackPanel>
         </Border>
 

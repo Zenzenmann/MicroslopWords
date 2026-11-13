@@ -9,6 +9,7 @@ using MicroslopWords.Core.Editing;
 using MicroslopWords.Core.Styles;
 using MicroslopWords.Formats.Docx;
 using MicroslopWords.Layout;
+using MicroslopWords.Rendering;
 
 namespace MicroslopWords.App.ViewModels;
 
@@ -36,8 +37,14 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     private readonly IImageFilePicker _imageFilePicker;
     private readonly IImageInsertDialog _imageInsertDialog;
     private readonly IImageDecoder _imageDecoder;
+    private readonly IPdfFilePicker _pdfFilePicker;
+    private readonly IPdfExportService _pdfExportService;
+    private readonly IPrintService _printService;
+    private readonly IPrintExportDialog _printExportDialog;
+    private readonly IAtomicFileWriter _atomicFileWriter;
     private readonly LayoutEngine _layoutEngine;
     private CommandHistory _history;
+    private CancellationTokenSource? _outputCancellation;
     private Guid? _selectedImageParagraphId;
     private Guid? _selectedImageRunId;
     private IReadOnlyList<Diagnostic> _documentDiagnostics = [];
@@ -170,6 +177,45 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
     {
     }
 
+    public MainViewModel(
+        IDocxFilePicker filePicker,
+        IDocxDocumentLoader documentLoader,
+        LayoutEngine layoutEngine,
+        IDocxDocumentSaver documentSaver,
+        ISaveConfirmation saveConfirmation,
+        IRecoverySnapshotStore recoveryStore,
+        IRecoveryPrompt recoveryPrompt,
+        IClipboardService? clipboardService,
+        IImageFilePicker imageFilePicker,
+        IImageInsertDialog imageInsertDialog,
+        IImageDecoder imageDecoder,
+        IPdfFilePicker pdfFilePicker,
+        IPdfExportService pdfExportService,
+        IPrintService printService,
+        IPrintExportDialog printExportDialog,
+        IAtomicFileWriter atomicFileWriter)
+        : this(
+            filePicker,
+            documentLoader,
+            layoutEngine,
+            documentSaver,
+            saveConfirmation,
+            recoveryStore,
+            recoveryPrompt,
+            DefaultAutosaveInterval,
+            TimeProvider.System,
+            clipboardService,
+            imageFilePicker,
+            imageInsertDialog,
+            imageDecoder,
+            pdfFilePicker,
+            pdfExportService,
+            printService,
+            printExportDialog,
+            atomicFileWriter)
+    {
+    }
+
     internal MainViewModel(
         IDocxFilePicker filePicker,
         IDocxDocumentLoader documentLoader,
@@ -183,7 +229,12 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         IClipboardService? clipboardService = null,
         IImageFilePicker? imageFilePicker = null,
         IImageInsertDialog? imageInsertDialog = null,
-        IImageDecoder? imageDecoder = null)
+        IImageDecoder? imageDecoder = null,
+        IPdfFilePicker? pdfFilePicker = null,
+        IPdfExportService? pdfExportService = null,
+        IPrintService? printService = null,
+        IPrintExportDialog? printExportDialog = null,
+        IAtomicFileWriter? atomicFileWriter = null)
     {
         ArgumentNullException.ThrowIfNull(filePicker);
         ArgumentNullException.ThrowIfNull(documentLoader);
@@ -217,6 +268,11 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         _imageFilePicker = imageFilePicker ?? new UnavailableImageFilePicker();
         _imageInsertDialog = imageInsertDialog ?? new UnavailableImageInsertDialog();
         _imageDecoder = imageDecoder ?? new HeaderOnlyImageDecoder();
+        _pdfFilePicker = pdfFilePicker ?? new UnavailablePdfFilePicker();
+        _pdfExportService = pdfExportService ?? new PdfExportService();
+        _printService = printService ?? new UnavailablePrintService();
+        _printExportDialog = printExportDialog ?? new UnavailablePrintExportDialog();
+        _atomicFileWriter = atomicFileWriter ?? new AtomicFileWriter();
         _history = new CommandHistory(
             Document.CreateEmpty(),
             timeProvider: _timeProvider);
@@ -260,6 +316,12 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     [ObservableProperty]
     public partial bool IsSaving { get; set; }
+
+    [ObservableProperty]
+    public partial bool IsExporting { get; set; }
+
+    [ObservableProperty]
+    public partial string OutputProgressText { get; set; } = "Exporting...";
 
     [ObservableProperty]
     public partial bool IsProgressVisible { get; set; }
@@ -540,6 +602,14 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     public bool CanCancelSave => IsSaving;
 
+    public bool CanPrintExport =>
+        CanStartAction
+        && !IsExporting
+        && Layout is not null
+        && Layout.Pages.Length > 0;
+
+    public bool CanCancelExport => IsExporting;
+
     public bool HasError => !string.IsNullOrEmpty(ErrorMessage);
 
     public bool HasDiagnostics => !string.IsNullOrEmpty(DiagnosticsSummary);
@@ -669,6 +739,259 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
 
     [RelayCommand(CanExecute = nameof(CanStartAction))]
     private Task SaveDocumentAsAsync() => SaveAsync(saveAs: true);
+
+    [RelayCommand(CanExecute = nameof(CanPrintExport))]
+    private async Task PrintAsync()
+    {
+        var layout = Layout;
+
+        if (layout is null || !CanPrintExport)
+        {
+            return;
+        }
+
+        IReadOnlyList<string> printers;
+
+        try
+        {
+            printers = await _printService.GetPrintersAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Print canceled.";
+            return;
+        }
+
+        var options = await _printExportDialog.ShowAsync(new PrintExportRequest(
+            PrintExportMode.Print,
+            DocumentTitle,
+            PageCount,
+            CurrentPage,
+            printers));
+
+        if (options is null)
+        {
+            StatusText = "Print canceled.";
+            return;
+        }
+
+        var pages = options.Range.Resolve(PageCount);
+
+        if (!pages.IsSuccess || pages.Value.IsDefault)
+        {
+            ErrorMessage = pages.Diagnostics.FirstOrDefault()?.Message
+                ?? "Choose a valid page range.";
+            return;
+        }
+
+        var export = await RunOutputAsync(
+            "Preparing print...",
+            token => RenderPdfAsync(
+                layout,
+                new PdfExportOptions(
+                    options.Range,
+                    options.IncludeHeadersFooters,
+                    DocumentTitle),
+                token));
+
+        if (export is null)
+        {
+            return;
+        }
+
+        if (!export.IsSuccess || export.Value is null)
+        {
+            ErrorMessage = export.Diagnostics.FirstOrDefault()?.Message
+                ?? "The document could not be prepared for printing.";
+            return;
+        }
+
+        var printed = await _printService.PrintAsync(
+            new PrintRequest(
+                DocumentTitle,
+                export.Value,
+                pages.Value,
+                options.Copies,
+                options.PrinterName));
+
+        if (!printed.IsSuccess || printed.Value is null)
+        {
+            ErrorMessage = printed.Diagnostics.FirstOrDefault()?.Message
+                ?? "The document could not be printed.";
+            return;
+        }
+
+        ErrorMessage = string.Empty;
+        var destination = string.IsNullOrWhiteSpace(options.PrinterName)
+            ? "the default printer"
+            : options.PrinterName;
+        StatusText =
+            $"Sent {printed.Value.PageCount} page(s) to {destination}.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanPrintExport))]
+    private async Task ExportPdfAsync()
+    {
+        var layout = Layout;
+
+        if (layout is null || !CanPrintExport)
+        {
+            return;
+        }
+
+        var options = await _printExportDialog.ShowAsync(new PrintExportRequest(
+            PrintExportMode.ExportPdf,
+            DocumentTitle,
+            PageCount,
+            CurrentPage,
+            []));
+
+        if (options is null)
+        {
+            StatusText = "Export canceled.";
+            return;
+        }
+
+        var pages = options.Range.Resolve(PageCount);
+
+        if (!pages.IsSuccess || pages.Value.IsDefault)
+        {
+            ErrorMessage = pages.Diagnostics.FirstOrDefault()?.Message
+                ?? "Choose a valid page range.";
+            return;
+        }
+
+        var pickedPath = await _pdfFilePicker.PickSaveFileAsync(
+            $"{SanitizeFileName(DocumentTitle)}.pdf");
+
+        if (string.IsNullOrWhiteSpace(pickedPath))
+        {
+            StatusText = "Export canceled.";
+            return;
+        }
+
+        var path = EnsurePdfExtension(pickedPath);
+        var export = await RunOutputAsync(
+            "Exporting PDF...",
+            async token =>
+            {
+                var rendered = await RenderPdfAsync(
+                    layout,
+                    new PdfExportOptions(
+                        options.Range,
+                        options.IncludeHeadersFooters,
+                        DocumentTitle),
+                    token);
+
+                if (!rendered.IsSuccess || rendered.Value is null)
+                {
+                    return rendered;
+                }
+
+                try
+                {
+                    await Task.Run(
+                        () => _atomicFileWriter.Write(
+                            path,
+                            stream => stream.Write(rendered.Value),
+                            token),
+                        token);
+                }
+                catch (Exception exception) when (
+                    exception is IOException
+                        or UnauthorizedAccessException
+                        or NotSupportedException
+                        or ArgumentException)
+                {
+                    return OperationResult.Failure<byte[]>(
+                        RenderingDiagnosticCodes.PdfExportFailed,
+                        "The PDF could not be saved. Choose another location.");
+                }
+
+                return rendered;
+            });
+
+        if (export is null)
+        {
+            return;
+        }
+
+        if (!export.IsSuccess || export.Value is null)
+        {
+            ErrorMessage = export.Diagnostics.FirstOrDefault()?.Message
+                ?? "The PDF could not be produced.";
+            return;
+        }
+
+        ErrorMessage = string.Empty;
+        StatusText =
+            $"Exported {pages.Value.Length} page(s) to {Path.GetFileName(path)}.";
+    }
+
+    [RelayCommand(CanExecute = nameof(CanCancelExport))]
+    private void CancelExport() => _outputCancellation?.Cancel();
+
+    private async Task<OperationResult<byte[]>?> RunOutputAsync(
+        string progressText,
+        Func<CancellationToken, Task<OperationResult<byte[]>>> operation)
+    {
+        IsExporting = true;
+        OutputProgressText = progressText;
+        _outputCancellation = new CancellationTokenSource();
+
+        try
+        {
+            return await operation(_outputCancellation.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            StatusText = "Canceled.";
+            return null;
+        }
+        finally
+        {
+            IsExporting = false;
+            _outputCancellation.Dispose();
+            _outputCancellation = null;
+        }
+    }
+
+    private Task<OperationResult<byte[]>> RenderPdfAsync(
+        DocumentLayout layout,
+        PdfExportOptions options,
+        CancellationToken cancellationToken) =>
+        Task.Run(
+            () =>
+            {
+                using var buffer = new MemoryStream();
+                var result = _pdfExportService.Export(
+                    layout,
+                    buffer,
+                    options,
+                    _layoutEngine.FontCatalog,
+                    cancellationToken);
+
+                return result.IsSuccess
+                    ? OperationResult.Success(buffer.ToArray())
+                    : OperationResult.Failure<byte[]>(result.Diagnostics.ToArray());
+            },
+            cancellationToken);
+
+    private static string EnsurePdfExtension(string path) =>
+        string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
+            ? path
+            : Path.ChangeExtension(path, ".pdf");
+
+    private static string SanitizeFileName(string title)
+    {
+        var invalid = Path.GetInvalidFileNameChars();
+        var characters = title
+            .Select(character => invalid.Contains(character) ? '_' : character)
+            .ToArray();
+        var name = new string(characters).Trim();
+
+        return string.IsNullOrWhiteSpace(name) ? "document" : name;
+    }
 
     [RelayCommand(CanExecute = nameof(CanCancelSave))]
     private void CancelSave() => _saveCancellation?.Cancel();
@@ -2419,6 +2742,9 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         CurrentPage = Math.Clamp(CurrentPage, 1, Math.Max(1, PageCount));
         OnPropertyChanged(nameof(PageCount));
         OnPropertyChanged(nameof(PageLabel));
+        OnPropertyChanged(nameof(CanPrintExport));
+        PrintCommand.NotifyCanExecuteChanged();
+        ExportPdfCommand.NotifyCanExecuteChanged();
 
         if (ZoomMode != ZoomFitMode.Custom)
         {
@@ -2512,6 +2838,15 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         NotifyActionCommands();
         NotifyEditingEnabledChanged();
         CancelSaveCommand.NotifyCanExecuteChanged();
+    }
+
+    partial void OnIsExportingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(CanPrintExport));
+        OnPropertyChanged(nameof(CanCancelExport));
+        PrintCommand.NotifyCanExecuteChanged();
+        ExportPdfCommand.NotifyCanExecuteChanged();
+        CancelExportCommand.NotifyCanExecuteChanged();
     }
 
     private void NotifyEditingEnabledChanged()
@@ -2958,6 +3293,9 @@ public partial class MainViewModel : ViewModelBase, ITextEditorHost, IDisposable
         OpenDocumentCommand.NotifyCanExecuteChanged();
         SaveDocumentCommand.NotifyCanExecuteChanged();
         SaveDocumentAsCommand.NotifyCanExecuteChanged();
+        PrintCommand.NotifyCanExecuteChanged();
+        ExportPdfCommand.NotifyCanExecuteChanged();
+        OnPropertyChanged(nameof(CanPrintExport));
     }
 
     private string BuildSuggestedFileName()

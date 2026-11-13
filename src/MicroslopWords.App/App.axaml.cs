@@ -32,7 +32,12 @@ public partial class App : Application
                 new AvaloniaClipboardService(window),
                 new AvaloniaImageFilePicker(window),
                 new AvaloniaImageInsertDialog(window),
-                new SkiaImageDecoder())
+                new SkiaImageDecoder(),
+                new AvaloniaPdfFilePicker(window),
+                new PdfExportService(),
+                new SystemPrintService(),
+                new AvaloniaPrintExportDialog(window),
+                new AtomicFileWriter())
             {
                 ReplaceConfirmation = new AvaloniaReplaceConfirmation(window),
             };

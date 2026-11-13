@@ -21,6 +21,7 @@ public sealed class FontFace : IDisposable
         Family = family;
         Weight = weight;
         Slant = slant;
+        FontData = fontData;
 
         var handle = GCHandle.Alloc(fontData, GCHandleType.Pinned);
 
@@ -68,6 +69,12 @@ public sealed class FontFace : IDisposable
     public FontWeight Weight { get; }
 
     public FontSlant Slant { get; }
+
+    /// <summary>
+    /// The original font bytes supplied by the catalog source. Renderers use
+    /// these to create platform typefaces for the same face layout measured.
+    /// </summary>
+    public byte[] FontData { get; }
 
     public int UnitsPerEm { get; }
 
