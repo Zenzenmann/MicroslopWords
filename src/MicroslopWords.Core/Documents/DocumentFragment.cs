@@ -23,12 +23,18 @@ public sealed record ParagraphFragment(
 
 public sealed record DocumentFragment(ImmutableArray<ParagraphFragment> Paragraphs)
 {
+    public ImmutableArray<TableBlock> Tables { get; init; } = [];
+
     public static DocumentFragment Empty { get; } = new([]);
 
-    public bool IsEmpty => Paragraphs.Length == 0;
+    public bool IsEmpty => Paragraphs.Length == 0 && Tables.Length == 0;
 
     public string PlainText =>
-        string.Join("\n", Paragraphs.Select(paragraph => paragraph.PlainText));
+        string.Join(
+            "\n",
+            Paragraphs
+                .Select(paragraph => paragraph.PlainText)
+                .Concat(Tables.Select(table => table.PlainText)));
 
     public static DocumentFragment Capture(Document document, Selection selection)
     {
@@ -43,6 +49,17 @@ public sealed record DocumentFragment(ImmutableArray<ParagraphFragment> Paragrap
 
         var start = normalized.GetStart(document);
         var end = normalized.GetEnd(document);
+        var startTable = document.FindTableForParagraph(start.ParagraphId);
+        var endTable = document.FindTableForParagraph(end.ParagraphId);
+
+        if (startTable is not null
+            && endTable is not null
+            && startTable.Id == endTable.Id
+            && start.ParagraphId != end.ParagraphId)
+        {
+            return new DocumentFragment([]) { Tables = [startTable.CloneWithNewIds()] };
+        }
+
         var paragraphs = CaptureParagraphs(document, start, end);
 
         return paragraphs.Length == 0 ? Empty : new DocumentFragment(paragraphs);
@@ -55,10 +72,7 @@ public sealed record DocumentFragment(ImmutableArray<ParagraphFragment> Paragrap
         TextPosition start,
         TextPosition end)
     {
-        var paragraphs = document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .ToImmutableArray();
+        var paragraphs = document.EnumerateParagraphs().ToImmutableArray();
         var startIndex = FindParagraphIndex(paragraphs, start.ParagraphId);
         var endIndex = FindParagraphIndex(paragraphs, end.ParagraphId);
 

@@ -57,12 +57,13 @@ public sealed class LayoutEngine
         var diagnostics = ImmutableArray.CreateBuilder<Diagnostic>();
         var pages = ImmutableArray.CreateBuilder<PageLayout>();
         var paragraphs = ImmutableArray.CreateBuilder<ParagraphLayout>();
+        var tables = ImmutableArray.CreateBuilder<TableLayout>();
         var pageNumber = 1;
         var cursorY = activePage.MarginTopPoints;
 
         void FlushPage()
         {
-            if (paragraphs.Count == 0)
+            if (paragraphs.Count == 0 && tables.Count == 0)
             {
                 return;
             }
@@ -74,16 +75,178 @@ public sealed class LayoutEngine
                     0,
                     activePage.EffectiveWidthPoints,
                     activePage.EffectiveHeightPoints),
-                paragraphs.ToImmutable()));
+                paragraphs.ToImmutable(),
+                tables.ToImmutable()));
 
             paragraphs.Clear();
+            tables.Clear();
             pageNumber++;
             cursorY = activePage.MarginTopPoints;
         }
 
+        void LayoutTable(TableBlock table)
+        {
+            var totalWidth = table.ColumnWidths.Sum();
+            var targetWidth = Math.Min(
+                table.WidthPoints ?? totalWidth,
+                contentWidth);
+            targetWidth = Math.Max(36, targetWidth);
+            var scale = totalWidth > 0 ? targetWidth / totalWidth : 1;
+            var widths = table.ColumnWidths
+                .Select(width => Math.Max(18, width * scale))
+                .ToArray();
+
+            if (widths.Sum() > contentWidth)
+            {
+                var correction = contentWidth / widths.Sum();
+                widths = widths.Select(width => width * correction).ToArray();
+            }
+
+            var left = activePage.MarginLeftPoints;
+            var measuredRows = new TableRowLayout[table.Rows.Length];
+            var rowHeights = new double[table.Rows.Length];
+
+            for (var index = 0; index < table.Rows.Length; index++)
+            {
+                var measured = MeasureTableRow(
+                    table,
+                    table.Rows[index],
+                    index,
+                    widths,
+                    left,
+                    shaper,
+                    styleSheet,
+                    diagnostics,
+                    listLabels,
+                    contentHeight);
+                measuredRows[index] = measured;
+                rowHeights[index] = measured.Bounds.Height;
+            }
+
+            for (var index = 0; index < table.Rows.Length; index++)
+            {
+                foreach (var cell in table.Rows[index].Cells)
+                {
+                    if (cell.IsMergedContinuation || cell.RowSpan <= 1)
+                    {
+                        continue;
+                    }
+
+                    var required = measuredRows[index].Cells
+                        .FirstOrDefault(item => item.CellId == cell.Id)?.Bounds.Height ?? 0;
+                    var span = Math.Min(cell.RowSpan, rowHeights.Length - index);
+                    var available = 0d;
+
+                    for (var offset = 0; offset < span; offset++)
+                    {
+                        available += rowHeights[index + offset];
+                    }
+
+                    if (required > available && span > 0)
+                    {
+                        rowHeights[index + span - 1] += required - available;
+                    }
+                }
+            }
+
+            TableRowLayout? headerLayout = null;
+
+            if (table.HasHeaderRow && measuredRows.Length > 0)
+            {
+                headerLayout = measuredRows[0];
+            }
+
+            var segmentRows = new List<TableRowLayout>();
+            var continues = false;
+
+            void AddSegment()
+            {
+                if (segmentRows.Count == 0)
+                {
+                    return;
+                }
+
+                var top = segmentRows[0].Bounds.Y;
+                var bottom = segmentRows[^1].Bounds.Bottom;
+
+                tables.Add(new TableLayout(
+                    table.Id,
+                    new LayoutRect(
+                        left,
+                        top,
+                        widths.Sum(),
+                        bottom - top),
+                    segmentRows.ToImmutableArray(),
+                    continues));
+
+                segmentRows.Clear();
+            }
+
+            for (var index = 0; index < table.Rows.Length; index++)
+            {
+                var height = Math.Max(18, rowHeights[index]);
+
+                if (cursorY + height > pageBottom
+                    && !RowIsInsideVerticalMerge(table, index)
+                    && (segmentRows.Count > 0 || paragraphs.Count > 0 || tables.Count > 0))
+                {
+                    AddSegment();
+                    FlushPage();
+                    continues = true;
+
+                    if (index > 0 && headerLayout is not null)
+                    {
+                        var placedHeader = OffsetTableRow(
+                            headerLayout,
+                            new LayoutRect(
+                                left,
+                                cursorY,
+                                widths.Sum(),
+                                Math.Max(18, rowHeights[0])),
+                            rowHeights);
+                        segmentRows.Add(placedHeader);
+                        cursorY += Math.Max(18, rowHeights[0]);
+                    }
+                }
+
+                if (cursorY + height > pageBottom
+                    && segmentRows.Count == 0
+                    && paragraphs.Count == 0
+                    && tables.Count == 0)
+                {
+                    diagnostics.Add(new Diagnostic(
+                        LayoutDiagnosticCodes.TableRowOverflow,
+                        DiagnosticSeverity.Warning,
+                        "A table row is taller than the page and may be clipped."));
+                }
+
+                var row = OffsetTableRow(
+                    measuredRows[index],
+                    new LayoutRect(
+                        left,
+                        cursorY,
+                        widths.Sum(),
+                        height),
+                    rowHeights);
+                segmentRows.Add(row);
+                cursorY += height;
+            }
+
+            AddSegment();
+
+            if (cursorY + 6 > pageBottom)
+            {
+                FlushPage();
+            }
+            else
+            {
+                cursorY += 6;
+            }
+        }
+
         foreach (var section in document.Sections)
         {
-            if (paragraphs.Count > 0)
+            if (paragraphs.Count > 0 || tables.Count > 0)
             {
                 FlushPage();
             }
@@ -94,8 +257,19 @@ public sealed class LayoutEngine
             pageBottom = activePage.MarginTopPoints + contentHeight;
             cursorY = activePage.MarginTopPoints;
 
-            foreach (var paragraph in section.Blocks.OfType<ParagraphBlock>())
+            foreach (var block in section.Blocks)
             {
+                if (block is TableBlock table)
+                {
+                    LayoutTable(table);
+                    continue;
+                }
+
+                if (block is not ParagraphBlock paragraph)
+                {
+                    continue;
+                }
+
                 var properties = StyleResolver.ResolveParagraph(paragraph, styleSheet);
                 var isList = properties.ListKind != ListKind.None;
                 var listLevel = Math.Clamp(properties.ListLevel, 1, 9);
@@ -292,7 +466,8 @@ public sealed class LayoutEngine
                     0,
                     defaultPage.EffectiveWidthPoints,
                     defaultPage.EffectiveHeightPoints),
-                ImmutableArray<ParagraphLayout>.Empty));
+                ImmutableArray<ParagraphLayout>.Empty,
+                ImmutableArray<TableLayout>.Empty));
         }
 
         foreach (var diagnostic in catalog.Diagnostics)
@@ -397,6 +572,293 @@ public sealed class LayoutEngine
             defaultFont,
             defaultFontSize);
     }
+
+    private const double TableCellPaddingPoints = 4;
+
+    private static bool RowIsInsideVerticalMerge(TableBlock table, int rowIndex)
+    {
+        for (var candidateRow = 0; candidateRow < rowIndex; candidateRow++)
+        {
+            foreach (var cell in table.Rows[candidateRow].Cells)
+            {
+                if (!cell.IsMergedContinuation
+                    && cell.RowSpan > 1
+                    && rowIndex < candidateRow + cell.RowSpan)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static TableRowLayout MeasureTableRow(
+        TableBlock table,
+        TableRow row,
+        int rowIndex,
+        double[] widths,
+        double left,
+        TextShaper shaper,
+        StyleSheet styleSheet,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        IReadOnlyDictionary<Guid, string> listLabels,
+        double maxHeight)
+    {
+        var cells = ImmutableArray.CreateBuilder<TableCellLayout>();
+        var gridColumn = 0;
+        var bottom = 0d;
+
+        foreach (var cell in row.Cells)
+        {
+            var span = Math.Max(1, cell.ColumnSpan);
+
+            if (!cell.IsMergedContinuation)
+            {
+                var cellX = left + widths.Take(gridColumn).Sum();
+                var cellWidth = widths.Skip(gridColumn).Take(span).Sum();
+                var paragraphs = LayoutCellParagraphs(
+                    cell,
+                    cellX,
+                    cellWidth,
+                    shaper,
+                    styleSheet,
+                    diagnostics,
+                    listLabels,
+                    maxHeight);
+                var contentBottom = paragraphs.Length == 0
+                    ? 0
+                    : paragraphs.Max(item => item.Bounds.Bottom);
+                var cellHeight = Math.Max(18, contentBottom + TableCellPaddingPoints);
+                cells.Add(new TableCellLayout(
+                    cell.Id,
+                    table.Id,
+                    rowIndex,
+                    gridColumn,
+                    span,
+                    Math.Max(1, cell.RowSpan),
+                    new LayoutRect(cellX, 0, cellWidth, cellHeight),
+                    paragraphs,
+                    row.IsHeader,
+                    cell.ShadingHex,
+                    cell.Borders));
+                bottom = Math.Max(bottom, cellHeight);
+            }
+
+            gridColumn += span;
+        }
+
+        return new TableRowLayout(
+            rowIndex,
+            new LayoutRect(left, 0, widths.Sum(), Math.Max(18, bottom)),
+            cells.ToImmutable(),
+            row.IsHeader);
+    }
+
+    private static ImmutableArray<ParagraphLayout> LayoutCellParagraphs(
+        TableCell cell,
+        double cellX,
+        double cellWidth,
+        TextShaper shaper,
+        StyleSheet styleSheet,
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        IReadOnlyDictionary<Guid, string> listLabels,
+        double maxHeight)
+    {
+        var paragraphs = ImmutableArray.CreateBuilder<ParagraphLayout>();
+        var y = TableCellPaddingPoints;
+
+        foreach (var paragraph in cell.Paragraphs)
+        {
+            var properties = StyleResolver.ResolveParagraph(paragraph, styleSheet);
+            var isList = properties.ListKind != ListKind.None;
+            var listLevel = Math.Clamp(properties.ListLevel, 1, 9);
+            var listLabel = isList && listLabels.TryGetValue(paragraph.Id, out var label)
+                ? label
+                : null;
+            var baseLeft = cellX
+                + TableCellPaddingPoints
+                + properties.LeftIndentPoints
+                + (isList ? (listLevel - 1) * ListIndentPoints : 0);
+            var textLeft = baseLeft + (isList ? ListIndentPoints : 0);
+            var wrapWidth = Math.Max(
+                1,
+                cellWidth
+                    - (TableCellPaddingPoints * 2)
+                    - properties.LeftIndentPoints
+                    - properties.RightIndentPoints
+                    - (isList
+                        ? ListIndentPoints + ((listLevel - 1) * ListIndentPoints)
+                        : 0)
+                    - (isList ? 0 : Math.Max(0, properties.FirstLineIndentPoints)));
+            var firstLineExtra = isList ? 0 : properties.FirstLineIndentPoints;
+            var defaultProperties = paragraph.Runs.Length == 0
+                ? styleSheet.FindParagraphStyle(properties.StyleId)?.CharacterProperties
+                    ?? RunProperties.Default
+                : StyleResolver.ResolveRun(paragraph.Runs[0], paragraph, styleSheet);
+            var defaultFont = ResolveFontRequest(defaultProperties);
+            var segments = SplitTextSegments(paragraph.PlainText);
+            var lines = ImmutableArray.CreateBuilder<LineLayout>();
+            var afterSoftBreak = false;
+            y += properties.SpaceBeforePoints;
+            var paragraphTop = y;
+
+            foreach (var segment in segments)
+            {
+                var shaped = ShapeSegment(
+                    paragraph,
+                    segment.Start,
+                    segment.Text.Length,
+                    shaper,
+                    diagnostics,
+                    defaultFont,
+                    defaultProperties.FontSizePoints,
+                    styleSheet,
+                    wrapWidth,
+                    maxHeight);
+                var wrapped = WrapStyledText(
+                    segment.Text,
+                    segment.Start,
+                    shaped.Clusters,
+                    wrapWidth,
+                    shaped.DefaultFont,
+                    shaped.DefaultFontSize,
+                    properties.Alignment == ParagraphAlignment.Justify);
+
+                for (var lineIndex = 0; lineIndex < wrapped.Length; lineIndex++)
+                {
+                    var line = wrapped[lineIndex];
+                    var lineHeight = line.FontSizePoints * properties.LineSpacing;
+                    var lineX = textLeft;
+
+                    if (!isList && lineIndex == 0)
+                    {
+                        lineX += firstLineExtra;
+                    }
+
+                    switch (properties.Alignment)
+                    {
+                        case ParagraphAlignment.Center:
+                            lineX += (wrapWidth - line.AdvanceWidthPoints) / 2;
+                            break;
+                        case ParagraphAlignment.Right:
+                            lineX += wrapWidth - line.AdvanceWidthPoints;
+                            break;
+                    }
+
+                    lineX = Math.Max(cellX + TableCellPaddingPoints, lineX);
+
+                    var images = ImmutableArray.CreateBuilder<InlineImageLayout>(
+                        line.Images.Length);
+
+                    foreach (var image in line.Images)
+                    {
+                        images.Add(new InlineImageLayout(
+                            image.RunId,
+                            image.TextStart,
+                            new LayoutRect(
+                                lineX + image.X,
+                                y + lineHeight - image.HeightPoints,
+                                image.WidthPoints,
+                                image.HeightPoints),
+                            image.Image));
+                    }
+
+                    lines.Add(new LineLayout(
+                        line.Text,
+                        line.TextStart,
+                        afterSoftBreak && lineIndex == 0,
+                        new LayoutRect(
+                            lineX,
+                            y,
+                            line.AdvanceWidthPoints,
+                            lineHeight),
+                        line.FontSizePoints,
+                        line.Clusters,
+                        line.ResolvedFont,
+                        line.Spans,
+                        images.ToImmutable()));
+                    y += lineHeight;
+                }
+
+                afterSoftBreak = segment.BreakAfter != TextBreakKind.None;
+            }
+
+            paragraphs.Add(new ParagraphLayout(
+                paragraph.Id,
+                new LayoutRect(
+                    cellX + TableCellPaddingPoints,
+                    paragraphTop,
+                    wrapWidth,
+                    y - paragraphTop),
+                lines.ToImmutable(),
+                listLabel,
+                cellX + TableCellPaddingPoints));
+            y += properties.SpaceAfterPoints;
+        }
+
+        return paragraphs.ToImmutable();
+    }
+
+    private static TableRowLayout OffsetTableRow(
+        TableRowLayout row,
+        LayoutRect bounds,
+        IReadOnlyList<double> rowHeights)
+    {
+        var offset = bounds.Y - row.Bounds.Y;
+
+        return row with
+        {
+            Bounds = bounds with
+            {
+                X = row.Bounds.X,
+                Width = row.Bounds.Width,
+            },
+            Cells = row.Cells
+                .Select(cell =>
+                {
+                    var height = cell.RowSpan > 1
+                        ? rowHeights
+                            .Skip(cell.RowIndex)
+                            .Take(cell.RowSpan)
+                            .Sum()
+                        : bounds.Height;
+
+                    return cell with
+                    {
+                        Bounds = cell.Bounds with
+                        {
+                            Y = cell.Bounds.Y + offset,
+                            Height = height,
+                        },
+                        Paragraphs = OffsetParagraphLayouts(cell.Paragraphs, offset),
+                    };
+                })
+                .ToImmutableArray(),
+        };
+    }
+
+    private static ImmutableArray<ParagraphLayout> OffsetParagraphLayouts(
+        ImmutableArray<ParagraphLayout> paragraphs,
+        double offset) =>
+        paragraphs
+            .Select(paragraph => paragraph with
+            {
+                Bounds = paragraph.Bounds with
+                {
+                    Y = paragraph.Bounds.Y + offset,
+                },
+                Lines = paragraph.Lines
+                    .Select(line => line with
+                    {
+                        Bounds = line.Bounds with
+                        {
+                            Y = line.Bounds.Y + offset,
+                        },
+                    })
+                    .ToImmutableArray(),
+            })
+            .ToImmutableArray();
 
     private static ImmutableArray<StyledLine> WrapStyledText(
         string segmentText,
@@ -657,9 +1119,7 @@ public sealed class LayoutEngine
         var labels = new Dictionary<Guid, string>();
         var counters = new Dictionary<Guid, Dictionary<int, int>>();
 
-        foreach (var paragraph in document.Sections
-                     .SelectMany(section => section.Blocks)
-                     .OfType<ParagraphBlock>())
+        foreach (var paragraph in document.EnumerateParagraphs())
         {
             var properties = StyleResolver.ResolveParagraph(paragraph, styleSheet);
 

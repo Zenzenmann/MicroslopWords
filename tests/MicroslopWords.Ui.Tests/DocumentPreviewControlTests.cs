@@ -371,6 +371,12 @@ public sealed class DocumentPreviewControlTests
 
         public void InsertSoftBreak() => Calls.Add("soft-break");
 
+        public bool TryMoveTableCell(bool forward)
+        {
+            Calls.Add(forward ? "next-cell" : "previous-cell");
+            return false;
+        }
+
         public void ResizeImage(
             Guid paragraphId,
             Guid runId,

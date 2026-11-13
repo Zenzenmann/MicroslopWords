@@ -16,6 +16,8 @@ public interface ITextEditorHost
 
     void InsertSoftBreak();
 
+    bool TryMoveTableCell(bool forward);
+
     void ResizeImage(
         Guid paragraphId,
         Guid runId,

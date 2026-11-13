@@ -27,7 +27,7 @@ public static class LayoutHitTesting
             var page = layout.Pages[pageIndex];
             var lineIndex = 0;
 
-            foreach (var paragraph in page.Paragraphs)
+            foreach (var paragraph in PageParagraphs(page))
             {
                 if (paragraph.ParagraphId != paragraphId)
                 {
@@ -121,7 +121,7 @@ public static class LayoutHitTesting
             var bestDistance = double.MaxValue;
             var lineIndex = 0;
 
-            foreach (var paragraph in page.Paragraphs)
+            foreach (var paragraph in PageParagraphs(page))
             {
                 foreach (var line in paragraph.Lines)
                 {
@@ -154,7 +154,7 @@ public static class LayoutHitTesting
         ArgumentNullException.ThrowIfNull(page);
         var index = 0;
 
-        foreach (var paragraph in page.Paragraphs)
+        foreach (var paragraph in PageParagraphs(page))
         {
             foreach (var line in paragraph.Lines)
             {
@@ -169,6 +169,13 @@ public static class LayoutHitTesting
 
         return null;
     }
+
+    private static IEnumerable<ParagraphLayout> PageParagraphs(PageLayout page) =>
+        page.Paragraphs
+            .Concat(page.Tables
+                .SelectMany(table => table.Rows)
+                .SelectMany(row => row.Cells)
+                .SelectMany(cell => cell.Paragraphs));
 
     public static double GetCaretX(LineLayout line, int paragraphOffset)
     {

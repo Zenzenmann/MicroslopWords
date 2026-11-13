@@ -286,11 +286,13 @@ public sealed class DocumentPreviewControl : Control
 
             using (context.PushClip(pageRect))
             {
+                DrawTables(context, page, pageRect, scale);
                 DrawSearchHighlights(context, page, pageRect, scale);
                 DrawSelection(context, page, pageRect, scale);
                 DrawListLabels(context, page, pageRect, scale);
 
-                foreach (var line in page.Paragraphs.SelectMany(paragraph => paragraph.Lines))
+                foreach (var line in PageParagraphs(page)
+                             .SelectMany(paragraph => paragraph.Lines))
                 {
                     DrawLine(context, line, pageRect, scale);
                 }
@@ -716,6 +718,15 @@ public sealed class DocumentPreviewControl : Control
                 }
 
                 return true;
+            case Key.Tab:
+                if (IsEditable
+                    && EditorHost?.TryMoveTableCell(
+                        !modifiers.HasFlag(KeyModifiers.Shift)) == true)
+                {
+                    return true;
+                }
+
+                return false;
             case Key.Enter when extend:
                 if (IsEditable)
                 {
@@ -968,13 +979,60 @@ public sealed class DocumentPreviewControl : Control
                 position.Offset);
     }
 
+    private static void DrawTables(
+        DrawingContext context,
+        PageLayout page,
+        Rect pageRect,
+        double scale)
+    {
+        foreach (var table in page.Tables)
+        {
+            foreach (var row in table.Rows)
+            {
+                foreach (var cell in row.Cells)
+                {
+                    var rect = new Rect(
+                        pageRect.X + (cell.Bounds.X * scale),
+                        pageRect.Y + (cell.Bounds.Y * scale),
+                        cell.Bounds.Width * scale,
+                        cell.Bounds.Height * scale);
+                    var shading = cell.ShadingHex
+                        ?? (row.IsHeader ? "#F2F2F2" : null);
+
+                    if (shading is not null)
+                    {
+                        context.FillRectangle(CreateBrush(shading), rect);
+                    }
+
+                    var borders = cell.Borders;
+
+                    if (borders is not null
+                        && (borders.Left || borders.Top || borders.Right || borders.Bottom))
+                    {
+                        var pen = new Pen(
+                            CreateBrush(borders.ColorHex),
+                            Math.Max(0.5, borders.WidthPoints * scale));
+                        context.DrawRectangle(null, pen, rect);
+                    }
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<ParagraphLayout> PageParagraphs(PageLayout page) =>
+        page.Paragraphs
+            .Concat(page.Tables
+                .SelectMany(table => table.Rows)
+                .SelectMany(row => row.Cells)
+                .SelectMany(cell => cell.Paragraphs));
+
     private static void DrawListLabels(
         DrawingContext context,
         PageLayout page,
         Rect pageRect,
         double scale)
     {
-        foreach (var paragraph in page.Paragraphs)
+        foreach (var paragraph in PageParagraphs(page))
         {
             if (string.IsNullOrEmpty(paragraph.ListLabel)
                 || paragraph.Lines.Length == 0)
@@ -1606,7 +1664,7 @@ public sealed class DocumentPreviewControl : Control
         var startOffset = GetParagraphOffset(start);
         var endOffset = GetParagraphOffset(end);
 
-        foreach (var paragraphLayout in page.Paragraphs)
+        foreach (var paragraphLayout in PageParagraphs(page))
         {
             var index = FindParagraphIndex(paragraphs, paragraphLayout.ParagraphId);
 
@@ -1646,10 +1704,7 @@ public sealed class DocumentPreviewControl : Control
     }
 
     private static List<ParagraphBlock> GetDocumentParagraphs(Document document) =>
-        document.Sections
-            .SelectMany(section => section.Blocks)
-            .OfType<ParagraphBlock>()
-            .ToList();
+        document.EnumerateParagraphs().ToList();
 
     private void DrawCaret(DrawingContext context, double scale)
     {
@@ -1838,7 +1893,7 @@ public sealed class DocumentPreviewControl : Control
     }
 
     private static int CountLines(PageLayout page) =>
-        page.Paragraphs.Sum(paragraph => paragraph.Lines.Length);
+        PageParagraphs(page).Sum(paragraph => paragraph.Lines.Length);
 
     private static int FindParagraphIndex(
         List<ParagraphBlock> paragraphs,

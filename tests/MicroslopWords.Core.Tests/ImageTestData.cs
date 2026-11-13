@@ -17,4 +17,3 @@ internal static class ImageTestData
 
     public static byte[] Jpeg() => Convert.FromBase64String(JpegBase64);
 }
-

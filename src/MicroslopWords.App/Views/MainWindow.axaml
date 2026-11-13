@@ -85,7 +85,19 @@
                 <MenuItem Header="Find and _Replace" Command="{Binding OpenReplaceCommand}" />
             </MenuItem>
             <MenuItem Header="_Insert" IsEnabled="{Binding IsEditingEnabled}">
-                <MenuItem Header="_Table" />
+                <MenuItem Header="_Table" Command="{Binding InsertTableCommand}" />
+                <MenuItem Header="Insert Row _Above" Command="{Binding InsertRowAboveCommand}" />
+                <MenuItem Header="Insert Row _Below" Command="{Binding InsertRowBelowCommand}" />
+                <MenuItem Header="Insert Column _Left" Command="{Binding InsertColumnLeftCommand}" />
+                <MenuItem Header="Insert Column _Right" Command="{Binding InsertColumnRightCommand}" />
+                <MenuItem Header="Delete Table _Row" Command="{Binding DeleteTableRowCommand}" />
+                <MenuItem Header="Delete Table _Column" Command="{Binding DeleteTableColumnCommand}" />
+                <MenuItem Header="Delete _Table" Command="{Binding DeleteTableCommand}" />
+                <MenuItem Header="Select _Table" Command="{Binding SelectTableCommand}" />
+                <MenuItem Header="_Merge Cells" Command="{Binding MergeTableCellsCommand}" />
+                <MenuItem Header="_Split Cell" Command="{Binding SplitTableCellCommand}" />
+                <MenuItem Header="Toggle _Header Row" Command="{Binding ToggleTableHeaderRowCommand}" />
+                <Separator />
                 <MenuItem Header="_Image..." Command="{Binding InsertImageCommand}" />
                 <MenuItem Header="Page _Break" Command="{Binding InsertPageBreakCommand}" />
             </MenuItem>
@@ -283,6 +295,28 @@
                     <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
                     <Button x:Name="PageBreakButton" Content="Page break" Command="{Binding InsertPageBreakCommand}" automation:AutomationProperties.Name="Insert page break" />
                     <Button Content="Clear" Command="{Binding ClearParagraphFormattingCommand}" ToolTip.Tip="Clear paragraph formatting" />
+                    <Rectangle Width="1" Height="24" Fill="#D8D8D8" Margin="4,0" />
+                    <TextBox x:Name="TableRowsBox" Width="36" Text="{Binding TableRowsInput, Mode=TwoWay}" automation:AutomationProperties.Name="Table rows" />
+                    <TextBlock Text="×" VerticalAlignment="Center" />
+                    <TextBox x:Name="TableColumnsBox" Width="36" Text="{Binding TableColumnsInput, Mode=TwoWay}" automation:AutomationProperties.Name="Table columns" />
+                    <CheckBox Content="Header" IsChecked="{Binding TableHasHeaderRow, Mode=TwoWay}" VerticalAlignment="Center" />
+                    <Button x:Name="InsertTableButton" Content="Insert table" Command="{Binding InsertTableCommand}" automation:AutomationProperties.Name="Insert table" />
+                    <Button Content="Row +" Command="{Binding InsertRowBelowCommand}" automation:AutomationProperties.Name="Insert row below" />
+                    <Button Content="Row -" Command="{Binding DeleteTableRowCommand}" automation:AutomationProperties.Name="Delete table row" />
+                    <Button Content="Col +" Command="{Binding InsertColumnRightCommand}" automation:AutomationProperties.Name="Insert column right" />
+                    <Button Content="Col -" Command="{Binding DeleteTableColumnCommand}" automation:AutomationProperties.Name="Delete table column" />
+                    <Button x:Name="MergeCellsButton" Content="Merge" Command="{Binding MergeTableCellsCommand}" automation:AutomationProperties.Name="Merge cells" />
+                    <Button Content="Split" Command="{Binding SplitTableCellCommand}" automation:AutomationProperties.Name="Split cell" />
+                    <Button Content="Header row" Command="{Binding ToggleTableHeaderRowCommand}" automation:AutomationProperties.Name="Toggle header row" />
+                    <Button Content="Delete table" Command="{Binding DeleteTableCommand}" automation:AutomationProperties.Name="Delete table" />
+                    <TextBox Width="72" Text="{Binding CellShadingInput, Mode=TwoWay}" PlaceholderText="Shading" automation:AutomationProperties.Name="Cell shading" />
+                    <Button Content="Shade" Command="{Binding ApplyCellShadingCommand}" automation:AutomationProperties.Name="Apply cell shading" />
+                    <Button Content="Borders" Command="{Binding ApplyCellBordersCommand}" automation:AutomationProperties.Name="Apply cell borders" />
+                    <Button Content="No borders" Command="{Binding ClearCellBordersCommand}" automation:AutomationProperties.Name="Clear cell borders" />
+                    <TextBox Width="54" Text="{Binding TableColumnWidthInput, Mode=TwoWay}" automation:AutomationProperties.Name="Table column width" />
+                    <Button Content="Col width" Command="{Binding ApplyTableColumnWidthCommand}" automation:AutomationProperties.Name="Apply column width" />
+                    <TextBox Width="54" Text="{Binding TableWidthInput, Mode=TwoWay}" automation:AutomationProperties.Name="Table width" />
+                    <Button Content="Table width" Command="{Binding ApplyTableWidthCommand}" automation:AutomationProperties.Name="Apply table width" />
                 </StackPanel>
             </ScrollViewer>
         </Border>

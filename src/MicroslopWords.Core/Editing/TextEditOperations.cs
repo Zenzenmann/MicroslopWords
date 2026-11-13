@@ -200,6 +200,58 @@ internal static class TextEditOperations
 
         return (updatedDocument, finalCaret);
     }
+
+    public static (Document Document, TextPosition Caret) InsertTables(
+        Document document,
+        TextPosition caret,
+        ImmutableArray<TableBlock> tables)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+
+        if (tables.Length == 0)
+        {
+            return (document, caret);
+        }
+
+        caret = TextNavigation.Normalize(document, caret);
+        var paragraph = document.FindParagraph(caret.ParagraphId);
+        var containingTable = document.FindTableForParagraph(caret.ParagraphId);
+        var anchor = containingTable?.Id ?? paragraph?.Id;
+
+        if (anchor is null)
+        {
+            return (document, caret);
+        }
+
+        var result = document;
+        var anchorId = anchor.Value;
+        var insertedTables = new List<TableBlock>(tables.Length);
+
+        foreach (var table in tables)
+        {
+            var inserted = table.CloneWithNewIds();
+            result = result.InsertBlockAfter(anchorId, inserted);
+            anchorId = inserted.Id;
+            insertedTables.Add(inserted);
+        }
+
+        if (result.Sections
+            .SelectMany(section => section.Blocks)
+            .LastOrDefault()?.Id == insertedTables[^1].Id)
+        {
+            result = result.InsertBlockAfter(
+                insertedTables[^1].Id,
+                ParagraphBlock.Create());
+        }
+
+        var firstParagraph = insertedTables[0].Rows
+            .SelectMany(row => row.Cells)
+            .SelectMany(cell => cell.Paragraphs)
+            .First();
+
+        return (result, TextNavigation.StartOf(firstParagraph));
+    }
+
     public static (Document Document, TextPosition Caret) DeleteRange(
         Document document,
         TextPosition start,
@@ -307,7 +359,33 @@ internal static class TextEditOperations
 
         var next = TextNavigation.NextParagraph(document, paragraphId);
 
-        if (next is null || !TryGetBlockLocation(document, next.Id, out var nextLocation))
+        if (next is null)
+        {
+            return (document, TextNavigation.EndOf(paragraph));
+        }
+
+        if (TextNavigation.AreInSameCell(document, paragraphId, next.Id)
+            && document.FindTableForParagraph(paragraphId) is not null)
+        {
+            var mergedParagraph = paragraph with
+            {
+                Runs = paragraph.Runs.AddRange(next.Runs),
+            };
+            var result = document
+                .ReplaceBlock(mergedParagraph)
+                .RemoveBlock(next.Id);
+            var caretAtJoin = paragraph.Runs.Length == 0
+                ? new TextPosition(paragraph.Id, Guid.Empty, 0)
+                : new TextPosition(
+                    paragraph.Id,
+                    paragraph.Runs[^1].Id,
+                    paragraph.Runs[^1].Text.Length,
+                    TextAffinity.Upstream);
+
+            return (result, caretAtJoin);
+        }
+
+        if (!TryGetBlockLocation(document, next.Id, out var nextLocation))
         {
             return (document, TextNavigation.EndOf(paragraph));
         }
@@ -422,6 +500,38 @@ internal static class TextEditOperations
         TextPosition start,
         TextPosition end)
     {
+        var startParagraph = document.FindParagraph(start.ParagraphId);
+        var endParagraph = document.FindParagraph(end.ParagraphId);
+
+        if (startParagraph is not null
+            && endParagraph is not null
+            && document.FindTableForParagraph(start.ParagraphId) is not null
+            && TextNavigation.AreInSameCell(document, start.ParagraphId, end.ParagraphId))
+        {
+            var cellRuns = BuildPrefix(startParagraph, start)
+                .AddRange(BuildSuffix(endParagraph, end));
+            var cellMerged = startParagraph with { Runs = cellRuns };
+            var result = document.ReplaceBlock(cellMerged);
+            var paragraphs = result.EnumerateParagraphs().ToList();
+            var startIndex = paragraphs.FindIndex(paragraph =>
+                paragraph.Id == start.ParagraphId);
+            var endIndex = paragraphs.FindIndex(paragraph =>
+                paragraph.Id == end.ParagraphId);
+
+            if (startIndex >= 0 && endIndex > startIndex)
+            {
+                foreach (var paragraph in paragraphs
+                             .Skip(startIndex + 1)
+                             .Take(endIndex - startIndex)
+                             .ToList())
+                {
+                    result = result.RemoveBlock(paragraph.Id);
+                }
+            }
+
+            return (result, CaretAtJoin(cellMerged, start));
+        }
+
         if (!TryGetBlockLocation(document, start.ParagraphId, out var startLocation)
             || !TryGetBlockLocation(document, end.ParagraphId, out var endLocation))
         {
@@ -433,8 +543,10 @@ internal static class TextEditOperations
             return (document, start);
         }
 
-        var startParagraph = document.FindParagraph(start.ParagraphId)!;
-        var endParagraph = document.FindParagraph(end.ParagraphId)!;
+        if (startParagraph is null || endParagraph is null)
+        {
+            return (document, start);
+        }
 
         var runs = BuildPrefix(startParagraph, start)
             .AddRange(BuildSuffix(endParagraph, end));

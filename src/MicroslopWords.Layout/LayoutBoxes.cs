@@ -45,10 +45,36 @@ public sealed record PageBreakLayout(
     Guid ParagraphId,
     int TextOffset);
 
+public sealed record TableCellLayout(
+    Guid CellId,
+    Guid TableId,
+    int RowIndex,
+    int ColumnIndex,
+    int ColumnSpan,
+    int RowSpan,
+    LayoutRect Bounds,
+    ImmutableArray<ParagraphLayout> Paragraphs,
+    bool IsHeader,
+    string? ShadingHex,
+    Core.Documents.TableBorders? Borders);
+
+public sealed record TableRowLayout(
+    int RowIndex,
+    LayoutRect Bounds,
+    ImmutableArray<TableCellLayout> Cells,
+    bool IsHeader);
+
+public sealed record TableLayout(
+    Guid TableId,
+    LayoutRect Bounds,
+    ImmutableArray<TableRowLayout> Rows,
+    bool ContinuesFromPreviousPage);
+
 public sealed record PageLayout(
     int PageNumber,
     LayoutRect Bounds,
-    ImmutableArray<ParagraphLayout> Paragraphs);
+    ImmutableArray<ParagraphLayout> Paragraphs,
+    ImmutableArray<TableLayout> Tables);
 
 public sealed record DocumentLayout(
     ImmutableArray<PageLayout> Pages,

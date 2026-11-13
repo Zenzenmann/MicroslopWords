@@ -475,7 +475,19 @@ public sealed class PasteFragmentCommand(
                 current.GetEnd(document));
         }
 
-        (result, caret) = TextEditOperations.InsertFragment(result, caret, fragment);
+        if (fragment.Paragraphs.Length > 0)
+        {
+            (result, caret) = TextEditOperations.InsertFragment(result, caret, fragment);
+        }
+
+        if (fragment.Tables.Length > 0)
+        {
+            (result, caret) = TextEditOperations.InsertTables(
+                result,
+                caret,
+                fragment.Tables);
+        }
+
         selectionAfter = Selection.Caret(caret);
 
         return result;
