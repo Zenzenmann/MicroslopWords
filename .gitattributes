@@ -1,0 +1,17 @@
+# Normalize text files to LF in every checkout so .editorconfig and dotnet format
+# agree on Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Binary assets must never be converted.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.docx binary
+*.pdf binary
+*.zip binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.pdb binary
